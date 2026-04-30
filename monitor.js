@@ -146,25 +146,34 @@ async function main(runMode) {
 
 async function fetchInstagramPosts(account) {
   const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(account.username)}`;
+  const headers = {
+    "Accept": "*/*",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": account.profileUrl,
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "X-ASBD-ID": "129477",
+    "X-Requested-With": "XMLHttpRequest",
+    "X-IG-App-ID": "936619743392459"
+  };
+
+  if (process.env.INSTAGRAM_COOKIE) {
+    headers.Cookie = process.env.INSTAGRAM_COOKIE;
+  }
+
   const response = await fetch(url, {
-    headers: {
-      "Accept": "*/*",
-      "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-      "Referer": account.profileUrl,
-      "Sec-Fetch-Dest": "empty",
-      "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Site": "same-origin",
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      "X-ASBD-ID": "129477",
-      "X-Requested-With": "XMLHttpRequest",
-      "X-IG-App-ID": "936619743392459"
-    }
+    headers
   });
 
   const body = await response.text();
   console.log(`[${account.key}] Instagram API status=${response.status} bytes=${body.length}`);
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error(`Instagram API returned 401; add/update GitHub Secret INSTAGRAM_COOKIE. Response: ${body.slice(0, 300)}`);
+    }
     throw new Error(`Instagram API returned ${response.status}: ${body.slice(0, 300)}`);
   }
 

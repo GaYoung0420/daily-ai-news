@@ -52,6 +52,7 @@ jobs:
           DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW: ${{ secrets.DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW }}
           DISCORD_WEBHOOK_THREADS_CHOI_OPENAI: ${{ secrets.DISCORD_WEBHOOK_THREADS_CHOI_OPENAI }}
           DISCORD_WEBHOOK_YOZM_AI: ${{ secrets.DISCORD_WEBHOOK_YOZM_AI }}
+          INSTAGRAM_COOKIE: ${{ secrets.INSTAGRAM_COOKIE }}
         run: npm run ${{ github.event.inputs.mode || 'check' }}
 
       - name: Commit seen state
