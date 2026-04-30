@@ -1,8 +1,13 @@
 import { XMLParser } from "fast-xml-parser";
 
 const FEED_URL = "https://cdn.aitimes.com/rss/gn_rss_allArticle.xml";
+const LIST_URL = "https://www.aitimes.com/news/articleList.html?sc_order_by=E&view_type=sm";
+const PAGING_URL = "https://www.aitimes.com/news/ajaxArticlePaging.php";
 const WEBHOOK_ENV = "DISCORD_WEBHOOK_AITIMES_DIGEST";
 const DISCORD_CONTENT_LIMIT = 2000;
+const LIST_PER_PAGE = 20;
+const MAX_LIST_PAGES = 200;
+const EXCLUDED_SECTIONS = new Set(["지역뉴스"]);
 
 const targetDate = process.env.TARGET_DATE || previousKstDate();
 const dryRun = process.env.DRY_RUN === "1";
@@ -12,7 +17,7 @@ await main();
 async function main() {
   console.log(`[aitimes-digest] targetDate=${targetDate}`);
 
-  const articles = await fetchAiTimesArticles();
+  const articles = await fetchAiTimesArticles(targetDate);
   const targetArticles = articles.filter((article) => formatKstDate(article.publishedAt) === targetDate);
   console.log(`[aitimes-digest] fetched=${articles.length} matched=${targetArticles.length}`);
 
@@ -36,13 +41,136 @@ async function main() {
   }
 }
 
-async function fetchAiTimesArticles() {
-  const response = await fetch(FEED_URL, {
-    headers: {
-      "Accept": "application/rss+xml, application/xml, text/xml, */*",
-      "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+async function fetchAiTimesArticles(date) {
+  try {
+    return await fetchAiTimesArticlesFromList(date);
+  } catch (error) {
+    console.warn(`[aitimes-digest] article list failed; falling back to RSS: ${error.message}`);
+    return fetchAiTimesArticlesFromRss();
+  }
+}
+
+async function fetchAiTimesArticlesFromList(date) {
+  const total = await fetchArticleTotal();
+  const articles = new Map();
+  let reachedPastTargetDate = false;
+
+  for (let page = 1; page <= MAX_LIST_PAGES && !reachedPastTargetDate; page += 1) {
+    const entries = await fetchArticleListPage(total, page);
+    console.log(`[aitimes-digest] list page=${page} items=${entries.length}`);
+
+    if (entries.length === 0) {
+      break;
     }
+
+    reachedPastTargetDate = entries.every((entry) => entry.date < date);
+
+    for (const entry of entries) {
+      if (entry.date !== date || isExcludedSection(entry.section)) {
+        continue;
+      }
+
+      articles.set(entry.id, entry);
+    }
+  }
+
+  return [...articles.values()].sort((a, b) => a.publishedAt - b.publishedAt);
+}
+
+async function fetchArticleTotal() {
+  const response = await fetch(LIST_URL, { headers: aiTimesHeaders() });
+  const body = await response.text();
+  console.log(`[aitimes-digest] list status=${response.status} bytes=${body.length}`);
+
+  if (!response.ok) {
+    throw new Error(`AI Times list returned ${response.status}: ${body.slice(0, 300)}`);
+  }
+
+  const total = body.match(/altlist-count[\s\S]*?<strong>([\d,]+)<\/strong>/)?.[1]?.replace(/,/g, "");
+  if (!total) {
+    throw new Error("Unable to find AI Times article total");
+  }
+
+  return total;
+}
+
+async function fetchArticleListPage(total, page) {
+  const url = new URL(PAGING_URL);
+  url.search = new URLSearchParams({
+    total,
+    list_per_page: String(LIST_PER_PAGE),
+    page_per_page: "10",
+    page: String(page),
+    sc_section_code: "",
+    sc_sub_section_code: "",
+    sc_serial_code: "",
+    sc_area: "",
+    sc_level: "",
+    sc_article_type: "",
+    sc_view_level: "",
+    sc_sdate: "",
+    sc_edate: "",
+    sc_serial_number: "",
+    sc_word: "",
+    sc_word2: "",
+    sc_andor: "",
+    sc_order_by: "E",
+    view_type: "",
+    sc_multi_code: "",
+    sc_is_image: "",
+    sc_is_movie: "",
+    sc_user_name: "",
+    box_idxno: "0"
+  });
+
+  const response = await fetch(url, {
+    headers: {
+      ...aiTimesHeaders(),
+      "Referer": LIST_URL,
+      "X-Requested-With": "XMLHttpRequest"
+    }
+  });
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`AI Times list page ${page} returned ${response.status}: ${body.slice(0, 300)}`);
+  }
+
+  const json = JSON.parse(body);
+  if (json.result !== "success" || !Array.isArray(json.data)) {
+    throw new Error(`AI Times list page ${page} returned unexpected payload: ${body.slice(0, 300)}`);
+  }
+
+  return json.data
+    .map(parseListArticle)
+    .filter(Boolean);
+}
+
+function parseListArticle(item) {
+  const id = String(item?.idxno || "");
+  const date = String(item?.recognition_date || item?.approve_date || item?.pub_date || "").slice(0, 10);
+  const time = String(item?.recognition_time || item?.viewTime || "00:00").slice(0, 5);
+  const title = cleanText(decodeHtmlEntities(item?.title || ""));
+  const section = cleanText(decodeHtmlEntities(item?.sectionTitle || ""));
+  const publishedAt = new Date(`${date}T${time}:00+09:00`);
+
+  if (!id || !title || !date || !Number.isFinite(publishedAt.getTime())) {
+    return null;
+  }
+
+  return {
+    id,
+    title,
+    url: `https://www.aitimes.com/news/articleView.html?idxno=${encodeURIComponent(id)}`,
+    section,
+    publishedAt,
+    date
+  };
+}
+
+async function fetchAiTimesArticlesFromRss() {
+  const response = await fetch(FEED_URL, {
+    headers: aiTimesHeaders("application/rss+xml, application/xml, text/xml, */*")
   });
 
   const body = await response.text();
@@ -70,11 +198,25 @@ async function fetchAiTimesArticles() {
         id: url.match(/idxno=([^&#]+)/)?.[1] || url,
         title,
         url,
+        section: cleanText(item?.category || ""),
         publishedAt
       };
     })
     .filter((article) => article.title && article.url && Number.isFinite(article.publishedAt.getTime()))
+    .filter((article) => !isExcludedSection(article.section))
     .sort((a, b) => a.publishedAt - b.publishedAt);
+}
+
+function aiTimesHeaders(accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8") {
+  return {
+    "Accept": accept,
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+  };
+}
+
+function isExcludedSection(section) {
+  return EXCLUDED_SECTIONS.has(cleanText(section));
 }
 
 function buildDigestMessages(date, articles) {
@@ -150,6 +292,17 @@ function cleanText(text) {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function decodeHtmlEntities(text) {
+  return String(text)
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'");
 }
 
 function normalizeUrl(value) {

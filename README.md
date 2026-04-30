@@ -92,7 +92,7 @@ npm start
 
 ### 5. Run AI Times digest
 
-KST 기준 전날 AI타임스 기사 목록을 Discord로 전송합니다.
+KST 기준 전날 AI타임스 기사 목록을 Discord로 전송합니다. AI타임스 지역뉴스는 제외합니다.
 
 ```bash
 npm run aitimes:digest
