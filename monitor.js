@@ -3,7 +3,10 @@ import path from "node:path";
 import { chromium } from "playwright";
 
 const SEEN_FILE = path.resolve("seen.json");
-const MAX_SEEN_PER_ACCOUNT = 80;
+const FETCH_LIMIT = 30;
+const MAX_SEEN_PER_ACCOUNT = 200;
+const THREADS_MAX_SCROLLS = 6;
+const THREADS_SCROLL_PAUSE_MS = 900;
 const DISCORD_DESCRIPTION_LIMIT = 4096;
 const DISCORD_TITLE_LIMIT = 256;
 
@@ -149,7 +152,7 @@ async function fetchInstagramPosts(account) {
     throw new Error(`Instagram API JSON did not include edge_owner_to_timeline_media.edges; user keys=${keys.join(",")}`);
   }
 
-  return edges.slice(0, 6).map(({ node }) => {
+  return edges.slice(0, FETCH_LIMIT).map(({ node }) => {
     const shortcode = node?.shortcode;
     const caption = node?.edge_media_to_caption?.edges?.[0]?.node?.text ?? "";
     const takenAt = Number.isFinite(node?.taken_at_timestamp) ? node.taken_at_timestamp * 1000 : undefined;
@@ -183,9 +186,35 @@ async function fetchThreadsPosts(account) {
     });
     console.log(`[${account.key}] Threads page status=${response?.status() ?? "unknown"}`);
 
-    await page.waitForTimeout(8000);
+    await page.waitForTimeout(5000);
 
-    const posts = await page.evaluate((username) => {
+    let posts = [];
+    for (let attempt = 0; attempt <= THREADS_MAX_SCROLLS; attempt += 1) {
+      posts = await extractThreadsPosts(page, account.username);
+      console.log(`[${account.key}] Threads crawl attempt=${attempt + 1} posts=${posts.length}`);
+
+      if (posts.length >= FETCH_LIMIT) {
+        break;
+      }
+
+      await page.mouse.wheel(0, 2200);
+      await page.waitForTimeout(THREADS_SCROLL_PAUSE_MS);
+    }
+
+    if (posts.length === 0) {
+      const html = await page.content();
+      console.error(`[${account.key}] Threads selector found no /@${account.username}/post/ links; rendered html bytes=${html.length}`);
+      console.error(`[${account.key}] html sample=${html.slice(0, 500).replace(/\s+/g, " ")}`);
+    }
+
+    return posts.slice(0, FETCH_LIMIT);
+  } finally {
+    await browser.close();
+  }
+}
+
+async function extractThreadsPosts(page, username) {
+  return page.evaluate((username) => {
       const cleanInlineText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
       const cleanBlockText = (value) =>
         (value ?? "")
@@ -195,6 +224,7 @@ async function fetchThreadsPosts(account) {
           .filter(Boolean)
           .join("\n")
           .trim();
+      const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const canonicalPostUrl = (href) => {
         try {
           const url = new URL(href, location.href);
@@ -211,13 +241,37 @@ async function fetchThreadsPosts(account) {
       const looksLikeRelativeTime = (text) =>
         /^(\d+\s*)?(초|분|시간|일|주|개월|년)$/.test(text) ||
         /^(\d+\s*)?(s|m|h|d|w|mo|y)$/i.test(text);
-      const looksLikeMetric = (text) => /^(\d[\d,.]*|[KM]\d+)(\s+\d[\d,.]*){0,4}$/i.test(text);
+      const relativeTimeSource = "(?:\\d+\\s*)?(?:초|분|시간|일|주|개월|년|s|m|h|d|w|mo|y)";
+      const authorTimePrefix = new RegExp(`^@?${escapeRegExp(username)}\\s+${relativeTimeSource}\\s*`, "i");
+      const looksLikeMetric = (text) =>
+        /^[\d,.]+$/.test(text) ||
+        /^[\d,.]+[KMB만천]?$/.test(text) ||
+        /^(\d[\d,.]*|[KMB]\d+)(\s+\d[\d,.]*){1,4}$/i.test(text);
       const isActionText = (text) =>
         /^(Like|Reply|Repost|Share|좋아요|답글|공유|리포스트|인용|Quote)$/i.test(text);
+      const stripNoiseLines = (value) =>
+        cleanBlockText(value)
+          .split("\n")
+          .map((line) => line.replace(authorTimePrefix, "").trim())
+          .filter(Boolean)
+          .filter((line) => line !== username)
+          .filter((line) => line !== `@${username}`)
+          .filter((line) => line !== "고정됨")
+          .filter((line) => !looksLikeRelativeTime(line))
+          .filter((line) => !looksLikeMetric(line))
+          .filter((line) => !isActionText(line))
+          .filter((line) => !line.includes("님에게 남긴 답글"))
+          .join("\n")
+          .trim();
+      const isPinnedPost = (root) =>
+        cleanBlockText(root?.innerText || root?.textContent || "")
+          .split("\n")
+          .some((line) => line.trim() === "고정됨" || /^Pinned$/i.test(line.trim()));
       const usefulText = (text) =>
         text &&
         !text.startsWith("@") &&
         !looksLikeRelativeTime(text) &&
+        !looksLikeMetric(text) &&
         !isActionText(text);
       const scoreImage = (img) => {
         const src = img?.getAttribute("src") ?? "";
@@ -226,17 +280,7 @@ async function fetchThreadsPosts(account) {
         return (img.clientWidth || 0) * (img.clientHeight || 0);
       };
       const extractPostText = (root) => {
-        const lines = cleanBlockText(root?.innerText || root?.textContent || "")
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .filter((line) => line !== username)
-          .filter((line) => line !== `@${username}`)
-          .filter((line) => line !== "고정됨")
-          .filter((line) => !looksLikeRelativeTime(line))
-          .filter((line) => !looksLikeMetric(line))
-          .filter((line) => !isActionText(line))
-          .filter((line) => !line.includes("님에게 남긴 답글"));
+        const lines = stripNoiseLines(root?.innerText || root?.textContent || "").split("\n");
 
         while (lines[0] && (lines[0] === username || looksLikeRelativeTime(lines[0]))) {
           lines.shift();
@@ -265,6 +309,14 @@ async function fetchThreadsPosts(account) {
 
         return best ?? anchor.closest("div");
       };
+      const hasPinnedRoot = (anchor) => {
+        for (let el = anchor; el; el = el.parentElement) {
+          const rect = el.getBoundingClientRect();
+          if (isPinnedPost(el)) return true;
+          if (rect.width >= 620 && rect.height > 900) return false;
+        }
+        return false;
+      };
 
       const anchors = [...document.querySelectorAll(`a[href*="/@${username}/post/"]`)];
       const byUrl = new Map();
@@ -272,6 +324,7 @@ async function fetchThreadsPosts(account) {
       for (const anchor of anchors) {
         const url = canonicalPostUrl(anchor.getAttribute("href"));
         if (!url) continue;
+        if (hasPinnedRoot(anchor)) continue;
 
         const textCandidates = [];
         const samePostAnchors = anchors.filter((candidate) => canonicalPostUrl(candidate.getAttribute("href")) === url);
@@ -283,14 +336,14 @@ async function fetchThreadsPosts(account) {
         }
 
         for (const candidate of samePostAnchors) {
-          const text = cleanBlockText(candidate.innerText || candidate.textContent);
+          const text = stripNoiseLines(candidate.innerText || candidate.textContent);
           if (usefulText(text)) textCandidates.push(text);
         }
 
         const container = rootCandidates[0] ?? anchor.closest("div");
         if (container) {
           for (const el of container.querySelectorAll("span, div")) {
-            const text = cleanBlockText(el.innerText || el.textContent);
+            const text = stripNoiseLines(el.innerText || el.textContent);
             if (usefulText(text)) {
               textCandidates.push(text);
             }
@@ -337,18 +390,7 @@ async function fetchThreadsPosts(account) {
       }
 
       return [...byUrl.values()];
-    }, account.username);
-
-    if (posts.length === 0) {
-      const html = await page.content();
-      console.error(`[${account.key}] Threads selector found no /@${account.username}/post/ links; rendered html bytes=${html.length}`);
-      console.error(`[${account.key}] html sample=${html.slice(0, 500).replace(/\s+/g, " ")}`);
-    }
-
-    return posts.slice(0, 6);
-  } finally {
-    await browser.close();
-  }
+    }, username);
 }
 
 function normalizePosts(posts, account) {
