@@ -73,12 +73,6 @@ async function main(runMode) {
       continue;
     }
 
-    if (known.size === 0) {
-      changed = mergeSeen(entry, latestIds) || changed;
-      console.log(`[${account.key}] seen list was empty; initialized with current posts and skipped notifications`);
-      continue;
-    }
-
     const newPosts = posts
       .filter((post) => !known.has(post.id))
       .sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0));
