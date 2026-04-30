@@ -186,7 +186,15 @@ async function fetchThreadsPosts(account) {
     await page.waitForTimeout(8000);
 
     const posts = await page.evaluate((username) => {
-      const cleanText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const cleanInlineText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const cleanBlockText = (value) =>
+        (value ?? "")
+          .replace(/\r\n/g, "\n")
+          .split("\n")
+          .map((line) => line.replace(/\s+/g, " ").trim())
+          .filter(Boolean)
+          .join("\n")
+          .trim();
       const canonicalPostUrl = (href) => {
         try {
           const url = new URL(href, location.href);
@@ -203,6 +211,7 @@ async function fetchThreadsPosts(account) {
       const looksLikeRelativeTime = (text) =>
         /^(\d+\s*)?(초|분|시간|일|주|개월|년)$/.test(text) ||
         /^(\d+\s*)?(s|m|h|d|w|mo|y)$/i.test(text);
+      const looksLikeMetric = (text) => /^(\d[\d,.]*|[KM]\d+)(\s+\d[\d,.]*){0,4}$/i.test(text);
       const isActionText = (text) =>
         /^(Like|Reply|Repost|Share|좋아요|답글|공유|리포스트|인용|Quote)$/i.test(text);
       const usefulText = (text) =>
@@ -216,6 +225,46 @@ async function fetchThreadsPosts(account) {
         if (/s150x150|profile|avatar/i.test(src)) return 0;
         return (img.clientWidth || 0) * (img.clientHeight || 0);
       };
+      const extractPostText = (root) => {
+        const lines = cleanBlockText(root?.innerText || root?.textContent || "")
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .filter((line) => line !== username)
+          .filter((line) => line !== `@${username}`)
+          .filter((line) => line !== "고정됨")
+          .filter((line) => !looksLikeRelativeTime(line))
+          .filter((line) => !looksLikeMetric(line))
+          .filter((line) => !isActionText(line))
+          .filter((line) => !line.includes("님에게 남긴 답글"));
+
+        while (lines[0] && (lines[0] === username || looksLikeRelativeTime(lines[0]))) {
+          lines.shift();
+        }
+
+        return lines.join("\n").trim();
+      };
+      const findPostRoot = (anchor) => {
+        let best = null;
+
+        for (let el = anchor; el; el = el.parentElement) {
+          const rect = el.getBoundingClientRect();
+          const text = extractPostText(el);
+          const allPostLinks = [...el.querySelectorAll(`a[href*="/@${username}/post/"]`)]
+            .filter((candidate) => canonicalPostUrl(candidate.getAttribute("href"))).length;
+
+          if (rect.width >= 450 && rect.height >= 70 && text.length > 0 && allPostLinks <= 4) {
+            best = el;
+            break;
+          }
+
+          if (rect.width >= 620 && rect.height > 900) {
+            break;
+          }
+        }
+
+        return best ?? anchor.closest("div");
+      };
 
       const anchors = [...document.querySelectorAll(`a[href*="/@${username}/post/"]`)];
       const byUrl = new Map();
@@ -224,22 +273,24 @@ async function fetchThreadsPosts(account) {
         const url = canonicalPostUrl(anchor.getAttribute("href"));
         if (!url) continue;
 
-        const container =
-          anchor.closest("article") ??
-          anchor.closest('[role="article"]') ??
-          anchor.closest("div:has(time)") ??
-          anchor.closest("div");
-
         const textCandidates = [];
         const samePostAnchors = anchors.filter((candidate) => canonicalPostUrl(candidate.getAttribute("href")) === url);
+        const rootCandidates = [...new Set(samePostAnchors.map(findPostRoot).filter(Boolean))];
+
+        for (const root of rootCandidates) {
+          const text = extractPostText(root);
+          if (usefulText(cleanInlineText(text))) textCandidates.push(text);
+        }
+
         for (const candidate of samePostAnchors) {
-          const text = cleanText(candidate.innerText || candidate.textContent);
+          const text = cleanBlockText(candidate.innerText || candidate.textContent);
           if (usefulText(text)) textCandidates.push(text);
         }
 
+        const container = rootCandidates[0] ?? anchor.closest("div");
         if (container) {
           for (const el of container.querySelectorAll("span, div")) {
-            const text = cleanText(el.innerText || el.textContent);
+            const text = cleanBlockText(el.innerText || el.textContent);
             if (usefulText(text)) {
               textCandidates.push(text);
             }
@@ -247,18 +298,28 @@ async function fetchThreadsPosts(account) {
         }
 
         const text = [...new Set(textCandidates)]
-          .sort((a, b) => b.length - a.length)
-          .find((candidate) => candidate.length > 10) ?? "";
+          .filter((candidate) => candidate.length > 10)
+          .sort((a, b) => {
+            const aLines = a.split("\n").length;
+            const bLines = b.split("\n").length;
+            if (aLines !== bLines) return bLines - aLines;
+            return b.length - a.length;
+          })[0] ?? "";
 
         const imageCandidates = [
           ...samePostAnchors.flatMap((candidate) => [...candidate.querySelectorAll("img[src^='http']")]),
           ...[...(container?.querySelectorAll("img[src^='http']") ?? [])]
         ]
-          .map((img) => ({ src: img.getAttribute("src") ?? "", score: scoreImage(img) }))
+          .map((img) => ({
+            src: img.getAttribute("src") ?? "",
+            width: img.naturalWidth || img.clientWidth || 0,
+            height: img.naturalHeight || img.clientHeight || 0,
+            score: scoreImage(img)
+          }))
           .filter((image) => image.score > 0)
           .sort((a, b) => b.score - a.score);
 
-        const image = imageCandidates[0]?.src ?? "";
+        const image = imageCandidates[0];
         const timeValue = container?.querySelector("time")?.getAttribute("datetime") ?? "";
 
         const previous = byUrl.get(url);
@@ -266,7 +327,9 @@ async function fetchThreadsPosts(account) {
           id: `threads:${url.split("/post/")[1]?.replace(/\/$/, "") || url}`,
           url,
           text: text || previous?.text || "",
-          imageUrl: image || previous?.imageUrl || "",
+          imageUrl: image?.src || previous?.imageUrl || "",
+          imageWidth: image?.width || previous?.imageWidth,
+          imageHeight: image?.height || previous?.imageHeight,
           timestampMs: timeValue ? Date.parse(timeValue) : previous?.timestampMs
         };
 
@@ -304,6 +367,8 @@ function normalizePosts(posts, account) {
       url,
       text: cleanDiscordText(post.text || ""),
       imageUrl: post.imageUrl || "",
+      imageWidth: Number.isFinite(post.imageWidth) ? post.imageWidth : undefined,
+      imageHeight: Number.isFinite(post.imageHeight) ? post.imageHeight : undefined,
       timestampMs: Number.isFinite(post.timestampMs) ? post.timestampMs : undefined
     });
   }
@@ -328,12 +393,13 @@ async function sendDiscordEmbed(account, post, webhookUrl) {
     timestamp
   };
 
-  if (post.imageUrl) {
+  if (post.imageUrl && shouldUseLargeEmbedImage(post)) {
     embed.image = { url: post.imageUrl };
+  } else if (post.imageUrl) {
+    embed.thumbnail = { url: post.imageUrl };
   }
 
   const payload = {
-    username: "NEWS-ALERTS-BOT",
     embeds: [embed],
     allowed_mentions: {
       parse: []
@@ -412,6 +478,12 @@ function cleanDiscordText(text) {
 function truncate(text, limit) {
   if (!text || text.length <= limit) return text;
   return `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function shouldUseLargeEmbedImage(post) {
+  if (!post.imageWidth || !post.imageHeight) return true;
+  const ratio = post.imageWidth / post.imageHeight;
+  return ratio >= 0.45 && ratio <= 2.2;
 }
 
 function formatError(error) {
