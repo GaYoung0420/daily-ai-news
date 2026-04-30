@@ -50,8 +50,7 @@ async function main(runMode) {
     try {
       posts = await account.fetchPosts(account);
     } catch (error) {
-      hadFailure = true;
-      console.error(`[${account.key}] fetch failed: ${formatError(error)}`);
+      console.error(`[${account.key}] fetch failed; keeping existing seen state unchanged: ${formatError(error)}`);
       continue;
     }
 
@@ -187,39 +186,61 @@ async function fetchThreadsPosts(account) {
     await page.waitForTimeout(8000);
 
     const posts = await page.evaluate((username) => {
-      const normalizeUrl = (href) => {
+      const cleanText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const canonicalPostUrl = (href) => {
         try {
           const url = new URL(href, location.href);
+          const match = url.pathname.match(new RegExp(`^/@${username}/post/([^/]+)/?$`));
+          if (!match) return null;
+          url.pathname = `/@${username}/post/${match[1]}`;
           url.search = "";
           url.hash = "";
           return url.toString();
         } catch {
-          return "";
+          return null;
         }
       };
+      const looksLikeRelativeTime = (text) =>
+        /^(\d+\s*)?(초|분|시간|일|주|개월|년)$/.test(text) ||
+        /^(\d+\s*)?(s|m|h|d|w|mo|y)$/i.test(text);
+      const isActionText = (text) =>
+        /^(Like|Reply|Repost|Share|좋아요|답글|공유|리포스트|인용|Quote)$/i.test(text);
+      const usefulText = (text) =>
+        text &&
+        !text.startsWith("@") &&
+        !looksLikeRelativeTime(text) &&
+        !isActionText(text);
+      const scoreImage = (img) => {
+        const src = img?.getAttribute("src") ?? "";
+        if (!src.startsWith("http")) return -1;
+        if (/s150x150|profile|avatar/i.test(src)) return 0;
+        return (img.clientWidth || 0) * (img.clientHeight || 0);
+      };
 
-      const cleanText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
       const anchors = [...document.querySelectorAll(`a[href*="/@${username}/post/"]`)];
       const byUrl = new Map();
 
       for (const anchor of anchors) {
-        const url = normalizeUrl(anchor.getAttribute("href"));
-        if (!url || byUrl.has(url)) continue;
+        const url = canonicalPostUrl(anchor.getAttribute("href"));
+        if (!url) continue;
 
         const container =
           anchor.closest("article") ??
           anchor.closest('[role="article"]') ??
+          anchor.closest("div:has(time)") ??
           anchor.closest("div");
 
         const textCandidates = [];
+        const samePostAnchors = anchors.filter((candidate) => canonicalPostUrl(candidate.getAttribute("href")) === url);
+        for (const candidate of samePostAnchors) {
+          const text = cleanText(candidate.innerText || candidate.textContent);
+          if (usefulText(text)) textCandidates.push(text);
+        }
+
         if (container) {
           for (const el of container.querySelectorAll("span, div")) {
             const text = cleanText(el.innerText || el.textContent);
-            if (
-              text &&
-              !text.startsWith("@") &&
-              !/^(Like|Reply|Repost|Share|좋아요|답글|공유|리포스트)$/i.test(text)
-            ) {
+            if (usefulText(text)) {
               textCandidates.push(text);
             }
           }
@@ -227,18 +248,29 @@ async function fetchThreadsPosts(account) {
 
         const text = [...new Set(textCandidates)]
           .sort((a, b) => b.length - a.length)
-          .find((candidate) => candidate.length > 10) ?? cleanText(container?.innerText || anchor.innerText);
+          .find((candidate) => candidate.length > 10) ?? "";
 
-        const image = container?.querySelector("img[src^='http']")?.getAttribute("src") ?? "";
+        const imageCandidates = [
+          ...samePostAnchors.flatMap((candidate) => [...candidate.querySelectorAll("img[src^='http']")]),
+          ...[...(container?.querySelectorAll("img[src^='http']") ?? [])]
+        ]
+          .map((img) => ({ src: img.getAttribute("src") ?? "", score: scoreImage(img) }))
+          .filter((image) => image.score > 0)
+          .sort((a, b) => b.score - a.score);
+
+        const image = imageCandidates[0]?.src ?? "";
         const timeValue = container?.querySelector("time")?.getAttribute("datetime") ?? "";
 
-        byUrl.set(url, {
+        const previous = byUrl.get(url);
+        const post = {
           id: `threads:${url.split("/post/")[1]?.replace(/\/$/, "") || url}`,
           url,
-          text,
-          imageUrl: image,
-          timestampMs: timeValue ? Date.parse(timeValue) : undefined
-        });
+          text: text || previous?.text || "",
+          imageUrl: image || previous?.imageUrl || "",
+          timestampMs: timeValue ? Date.parse(timeValue) : previous?.timestampMs
+        };
+
+        byUrl.set(url, post);
       }
 
       return [...byUrl.values()];
@@ -281,8 +313,9 @@ function normalizePosts(posts, account) {
 
 async function sendDiscordEmbed(account, post, webhookUrl) {
   const timestamp = post.timestampMs ? new Date(post.timestampMs).toISOString() : new Date().toISOString();
-  const description = truncate(post.text || post.url, DISCORD_DESCRIPTION_LIMIT);
+  const description = truncate(post.text || `${account.platform} @${account.username} 새 게시물`, DISCORD_DESCRIPTION_LIMIT);
   const title = truncate(firstMeaningfulLine(post.text) || `${account.platform} @${account.username} 새 게시물`, DISCORD_TITLE_LIMIT);
+  const host = new URL(account.profileUrl).hostname.replace(/^www\./, "");
 
   const embed = {
     title,
@@ -290,7 +323,7 @@ async function sendDiscordEmbed(account, post, webhookUrl) {
     description,
     color: account.color,
     footer: {
-      text: `${account.platform} @${account.username}`
+      text: `${account.username} | ${host}`
     },
     timestamp
   };
