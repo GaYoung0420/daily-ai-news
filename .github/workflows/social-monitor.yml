@@ -2,8 +2,9 @@ name: Social Monitor
 
 on:
   schedule:
-    # KST 08:30, 12:30, 18:30
-    - cron: "30 23,3,9 * * *"
+    # KST 08:00-21:00 hourly
+    - cron: "0 23 * * *"
+    - cron: "0 0-12 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -47,7 +48,10 @@ jobs:
       - name: Run monitor
         env:
           DISCORD_WEBHOOK_INSTAGRAM_AI_FREAKS: ${{ secrets.DISCORD_WEBHOOK_INSTAGRAM_AI_FREAKS }}
+          DISCORD_WEBHOOK_INSTAGRAM_PROMPPY: ${{ secrets.DISCORD_WEBHOOK_INSTAGRAM_PROMPPY }}
+          DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW: ${{ secrets.DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW }}
           DISCORD_WEBHOOK_THREADS_CHOI_OPENAI: ${{ secrets.DISCORD_WEBHOOK_THREADS_CHOI_OPENAI }}
+          DISCORD_WEBHOOK_YOZM_AI: ${{ secrets.DISCORD_WEBHOOK_YOZM_AI }}
         run: npm run ${{ github.event.inputs.mode || 'check' }}
 
       - name: Commit seen state

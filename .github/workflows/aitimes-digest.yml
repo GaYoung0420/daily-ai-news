@@ -1,0 +1,35 @@
+name: AI Times Digest
+
+on:
+  schedule:
+    # KST 08:10 daily
+    - cron: "10 23 * * *"
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "KST date to collect, YYYY-MM-DD. Empty means yesterday."
+        required: false
+        default: ""
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Send AI Times digest
+        env:
+          DISCORD_WEBHOOK_AITIMES_DIGEST: ${{ secrets.DISCORD_WEBHOOK_AITIMES_DIGEST }}
+          TARGET_DATE: ${{ github.event.inputs.target_date }}
+        run: npm run aitimes:digest

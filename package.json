@@ -7,9 +7,11 @@
   "scripts": {
     "start": "node monitor.js check",
     "check": "node monitor.js check",
-    "seed": "node monitor.js seed"
+    "seed": "node monitor.js seed",
+    "aitimes:digest": "node aitimes-digest.js"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.7.2",
     "playwright": "^1.52.0"
   },
   "engines": {

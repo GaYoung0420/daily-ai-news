@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { XMLParser } from "fast-xml-parser";
 
 const SEEN_FILE = path.resolve("seen.json");
 const FETCH_LIMIT = 30;
@@ -21,6 +22,24 @@ const ACCOUNTS = [
     fetchPosts: fetchInstagramPosts
   },
   {
+    key: "instagram:promppy_com",
+    platform: "Instagram",
+    username: "promppy_com",
+    profileUrl: "https://www.instagram.com/promppy_com/",
+    webhookEnv: "DISCORD_WEBHOOK_INSTAGRAM_PROMPPY",
+    color: 0xff5a5f,
+    fetchPosts: fetchInstagramPosts
+  },
+  {
+    key: "instagram:ai.ainow",
+    platform: "Instagram",
+    username: "ai.ainow",
+    profileUrl: "https://www.instagram.com/ai.ainow/",
+    webhookEnv: "DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW",
+    color: 0xff5a5f,
+    fetchPosts: fetchInstagramPosts
+  },
+  {
     key: "threads:choi.openai",
     platform: "Threads",
     username: "choi.openai",
@@ -28,6 +47,16 @@ const ACCOUNTS = [
     webhookEnv: "DISCORD_WEBHOOK_THREADS_CHOI_OPENAI",
     color: 0x222222,
     fetchPosts: fetchThreadsPosts
+  },
+  {
+    key: "yozm:ai",
+    platform: "Yozm IT",
+    username: "AI",
+    profileUrl: "https://yozm.wishket.com/magazine/list/ai/",
+    feedUrl: "https://yozm.wishket.com/magazine/ai/feed/",
+    webhookEnv: "DISCORD_WEBHOOK_YOZM_AI",
+    color: 0x5a00db,
+    fetchPosts: fetchRssPosts
   }
 ];
 
@@ -163,6 +192,46 @@ async function fetchInstagramPosts(account) {
       text: caption,
       imageUrl: node?.display_url ?? node?.thumbnail_src,
       timestampMs: takenAt
+    };
+  });
+}
+
+async function fetchRssPosts(account) {
+  const response = await fetch(account.feedUrl, {
+    headers: {
+      "Accept": "application/rss+xml, application/xml, text/xml, */*",
+      "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    }
+  });
+
+  const body = await response.text();
+  console.log(`[${account.key}] RSS status=${response.status} bytes=${body.length}`);
+
+  if (!response.ok) {
+    throw new Error(`RSS returned ${response.status}: ${body.slice(0, 300)}`);
+  }
+
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    trimValues: true
+  });
+  const xml = parser.parse(body);
+  const items = xml?.rss?.channel?.item;
+  const entries = Array.isArray(items) ? items : items ? [items] : [];
+
+  return entries.slice(0, FETCH_LIMIT).map((item) => {
+    const url = normalizePostUrl(String(item?.link || item?.guid || account.profileUrl));
+    const title = cleanRssText(item?.title || "");
+    const description = cleanRssText(item?.description || "");
+    const published = Date.parse(item?.pubDate || item?.["dc:date"] || "");
+    const detailId = url.match(/\/magazine\/detail\/([^/?#]+)/)?.[1];
+
+    return {
+      id: detailId ? `yozm:${detailId}` : `yozm:${url}`,
+      url,
+      text: [title, description].filter(Boolean).join("\n\n"),
+      timestampMs: Number.isFinite(published) ? published : undefined
     };
   });
 }
@@ -514,6 +583,19 @@ function cleanDiscordText(text) {
   return text
     .replace(/\u0000/g, "")
     .replace(/\r\n/g, "\n")
+    .trim();
+}
+
+function cleanRssText(text) {
+  return String(text)
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
