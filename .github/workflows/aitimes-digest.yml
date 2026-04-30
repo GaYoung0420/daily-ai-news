@@ -4,12 +4,6 @@ on:
   schedule:
     # KST 08:10 daily
     - cron: "10 23 * * *"
-  workflow_dispatch:
-    inputs:
-      target_date:
-        description: "KST date to collect, YYYY-MM-DD. Empty means yesterday."
-        required: false
-        default: ""
 
 jobs:
   digest:

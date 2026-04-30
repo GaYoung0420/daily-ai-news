@@ -53,10 +53,10 @@ const ACCOUNTS = [
     platform: "Yozm IT",
     username: "AI",
     profileUrl: "https://yozm.wishket.com/magazine/list/ai/",
-    feedUrl: "https://yozm.wishket.com/magazine/ai/feed/",
+    feedUrl: "https://api.wishket.com/yozmit/news/?category=ai&page=1",
     webhookEnv: "DISCORD_WEBHOOK_YOZM_AI",
     color: 0x5a00db,
-    fetchPosts: fetchRssPosts
+    fetchPosts: fetchYozmPosts
   }
 ];
 
@@ -161,6 +161,10 @@ async function fetchInstagramPosts(account) {
 
   if (process.env.INSTAGRAM_COOKIE) {
     headers.Cookie = process.env.INSTAGRAM_COOKIE;
+    const csrfToken = getCookieValue(process.env.INSTAGRAM_COOKIE, "csrftoken");
+    if (csrfToken) {
+      headers["X-CSRFToken"] = csrfToken;
+    }
   }
 
   const response = await fetch(url, {
@@ -189,6 +193,10 @@ async function fetchInstagramPosts(account) {
     const keys = Object.keys(json?.data?.user ?? {});
     throw new Error(`Instagram API JSON did not include edge_owner_to_timeline_media.edges; user keys=${keys.join(",")}`);
   }
+  if (edges.length === 0) {
+    const userKeys = Object.keys(json?.data?.user ?? {});
+    console.error(`[${account.key}] Instagram API returned 0 timeline edges; user keys=${userKeys.join(",")}; cookie may be incomplete or challenged`);
+  }
 
   return edges.slice(0, FETCH_LIMIT).map(({ node }) => {
     const shortcode = node?.shortcode;
@@ -201,6 +209,56 @@ async function fetchInstagramPosts(account) {
       text: caption,
       imageUrl: node?.display_url ?? node?.thumbnail_src,
       timestampMs: takenAt
+    };
+  });
+}
+
+async function fetchYozmPosts(account) {
+  const items = [];
+  let nextUrl = account.feedUrl;
+
+  while (nextUrl && items.length < FETCH_LIMIT) {
+    const response = await fetch(nextUrl, {
+      headers: {
+        "Accept": "application/json, */*",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Origin": "https://yozm.wishket.com",
+        "Referer": account.profileUrl,
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+      }
+    });
+
+    const body = await response.text();
+    console.log(`[${account.key}] Yozm API status=${response.status} bytes=${body.length}`);
+
+    if (!response.ok) {
+      throw new Error(`Yozm API returned ${response.status}: ${body.slice(0, 300)}`);
+    }
+
+    let json;
+    try {
+      json = JSON.parse(body);
+    } catch (error) {
+      throw new Error(`Yozm API response was not JSON: ${formatError(error)}; sample=${body.slice(0, 300)}`);
+    }
+
+    items.push(...(Array.isArray(json?.results) ? json.results : []));
+    nextUrl = json?.next || "";
+  }
+
+  return items.slice(0, FETCH_LIMIT).map((item) => {
+    const id = item?.id;
+    const url = id ? `https://yozm.wishket.com/magazine/detail/${id}/` : account.profileUrl;
+    const title = cleanRssText(item?.title || "");
+    const description = cleanRssText(item?.description || "");
+    const published = Date.parse(item?.repr_date_published || "");
+
+    return {
+      id: id ? `yozm:${id}` : `yozm:${url}`,
+      url,
+      text: [title, description].filter(Boolean).join("\n\n"),
+      imageUrl: item?.thumbnail_image || "",
+      timestampMs: Number.isFinite(published) ? published : undefined
     };
   });
 }
@@ -606,6 +664,10 @@ function cleanRssText(text) {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getCookieValue(cookie, name) {
+  return cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1] || "";
 }
 
 function truncate(text, limit) {

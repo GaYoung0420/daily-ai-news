@@ -1,11 +1,11 @@
 # Daily AI News
 
-AI 관련 새 게시물을 자동으로 모니터링하고 Discord Webhook으로 알림을 보내는 무료 모니터링 시스템입니다. Instagram, Threads, RSS 피드를 주기적으로 확인하며, GitHub Actions cron을 활용해 별도 서버 없이 운영할 수 있도록 구성되어 있습니다.
+AI 관련 새 게시물을 자동으로 모니터링하고 Discord Webhook으로 알림을 보내는 무료 모니터링 시스템입니다. Instagram, Threads, RSS/API 소스를 주기적으로 확인하며, GitHub Actions cron을 활용해 별도 서버 없이 운영할 수 있도록 구성되어 있습니다.
 
 ## Features
 
 - **소셜 계정 모니터링**: Instagram, Threads 계정의 최신 게시물을 확인하고 신규 게시물만 Discord embed로 알림을 전송합니다.
-- **RSS 피드 수집**: Yozm IT AI RSS 피드를 파싱해 새 글을 Discord로 전달합니다.
+- **Yozm IT 수집**: Yozm IT AI API를 조회해 새 글을 Discord로 전달합니다.
 - **AI Times 일일 다이제스트**: KST 기준 전날 등록된 AI타임스 기사를 모아 Discord 링크 목록으로 발송합니다.
 - **중복 알림 방지**: `seen.json`에 이미 처리한 게시물 ID를 저장해 동일 콘텐츠가 반복 전송되지 않도록 관리합니다.
 - **Seed 모드 지원**: 현재 최신 게시물을 상태 파일에만 저장하고 Discord 알림은 보내지 않아 초기 세팅 시 불필요한 알림을 방지합니다.
@@ -64,7 +64,7 @@ GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and varia
 | `DISCORD_WEBHOOK_INSTAGRAM_PROMPPY` | Instagram `promppy_com` 알림 |
 | `DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW` | Instagram `ai.ainow` 알림 |
 | `DISCORD_WEBHOOK_THREADS_CHOI_OPENAI` | Threads `choi.openai` 알림 |
-| `DISCORD_WEBHOOK_YOZM_AI` | Yozm IT AI RSS 알림 |
+| `DISCORD_WEBHOOK_YOZM_AI` | Yozm IT AI 알림 |
 | `DISCORD_WEBHOOK_AITIMES_DIGEST` | AI Times 일일 다이제스트 알림 |
 | `INSTAGRAM_COOKIE` | GitHub Actions에서 Instagram `401 require_login`이 발생할 때 사용하는 Instagram 로그인 쿠키 |
 
@@ -127,7 +127,7 @@ DRY_RUN=1 TARGET_DATE=2026-04-29 npm run aitimes:digest
 
 - 매일 KST 08:10 실행
 - UTC cron: `10 23 * * *`
-- 수동 실행 시 `target_date` 입력으로 특정 KST 날짜의 기사 목록 전송 가능
+- 정기 스케줄로만 실행되며, 특정 날짜 확인은 로컬에서 `TARGET_DATE`와 `DRY_RUN=1`로 검증합니다.
 
 ## Project Structure
 
