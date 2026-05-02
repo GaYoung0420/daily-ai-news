@@ -8,6 +8,7 @@ const FETCH_LIMIT = 30;
 const MAX_SEEN_PER_ACCOUNT = 200;
 const THREADS_MAX_SCROLLS = 6;
 const THREADS_SCROLL_PAUSE_MS = 900;
+const INSTAGRAM_PAGE_WAIT_MS = 5000;
 const DISCORD_DESCRIPTION_LIMIT = 4096;
 const DISCORD_TITLE_LIMIT = 256;
 
@@ -196,6 +197,7 @@ async function fetchInstagramPosts(account) {
   if (edges.length === 0) {
     const userKeys = Object.keys(json?.data?.user ?? {});
     console.error(`[${account.key}] Instagram API returned 0 timeline edges; user keys=${userKeys.join(",")}; cookie may be incomplete or challenged`);
+    return fetchInstagramPostsFromPage(account);
   }
 
   return edges.slice(0, FETCH_LIMIT).map(({ node }) => {
@@ -211,6 +213,113 @@ async function fetchInstagramPosts(account) {
       timestampMs: takenAt
     };
   });
+}
+
+async function fetchInstagramPostsFromPage(account) {
+  console.log(`[${account.key}] falling back to Instagram profile page crawl`);
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--disable-blink-features=AutomationControlled"]
+  });
+
+  try {
+    const context = await browser.newContext({
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      locale: "ko-KR",
+      viewport: { width: 1280, height: 1800 }
+    });
+
+    if (process.env.INSTAGRAM_COOKIE) {
+      await context.addCookies(parseInstagramCookies(process.env.INSTAGRAM_COOKIE));
+    }
+
+    const page = await context.newPage();
+    const response = await page.goto(account.profileUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000
+    });
+    console.log(`[${account.key}] Instagram page status=${response?.status() ?? "unknown"}`);
+
+    await page.waitForTimeout(INSTAGRAM_PAGE_WAIT_MS);
+    const posts = await extractInstagramPosts(page, account.username);
+
+    if (posts.length === 0) {
+      const html = await page.content();
+      console.error(`[${account.key}] Instagram page crawl found no /${account.username}/p/ or /reel/ links; rendered html bytes=${html.length}`);
+      console.error(`[${account.key}] html sample=${html.slice(0, 500).replace(/\s+/g, " ")}`);
+    }
+
+    return posts.slice(0, FETCH_LIMIT);
+  } finally {
+    await browser.close();
+  }
+}
+
+async function extractInstagramPosts(page, username) {
+  return page.evaluate((username) => {
+    const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const usernamePattern = escapeRegExp(username);
+    const canonicalPostUrl = (href) => {
+      try {
+        const url = new URL(href, location.href);
+        const match = url.pathname.match(new RegExp(`^/${usernamePattern}/(p|reel)/([^/]+)/?$`));
+        if (!match) return null;
+        url.pathname = `/${username}/${match[1]}/${match[2]}/`;
+        url.search = "";
+        url.hash = "";
+        return url.toString();
+      } catch {
+        return null;
+      }
+    };
+    const scoreImage = (img) => {
+      const src = img?.getAttribute("src") ?? "";
+      if (!src.startsWith("http")) return -1;
+      if (/s150x150|profile|avatar/i.test(src)) return 0;
+      return (img.naturalWidth || img.clientWidth || 0) * (img.naturalHeight || img.clientHeight || 0);
+    };
+
+    const anchors = [
+      ...document.querySelectorAll(`a[href*="/${username}/p/"], a[href*="/${username}/reel/"]`)
+    ];
+    const byUrl = new Map();
+
+    for (const anchor of anchors) {
+      const url = canonicalPostUrl(anchor.getAttribute("href"));
+      if (!url || byUrl.has(url)) continue;
+
+      const container = anchor.closest("article, div") ?? anchor;
+      const imageCandidates = [
+        ...anchor.querySelectorAll("img[src^='http']"),
+        ...container.querySelectorAll("img[src^='http']")
+      ]
+        .map((img) => ({
+          src: img.getAttribute("src") ?? "",
+          alt: img.getAttribute("alt") ?? "",
+          width: img.naturalWidth || img.clientWidth || 0,
+          height: img.naturalHeight || img.clientHeight || 0,
+          score: scoreImage(img)
+        }))
+        .filter((image) => image.score > 0)
+        .sort((a, b) => b.score - a.score);
+
+      const image = imageCandidates[0];
+      const shortcode = url.match(/\/(?:p|reel)\/([^/]+)\//)?.[1] ?? url;
+      const timeValue = container.querySelector("time")?.getAttribute("datetime") ?? "";
+
+      byUrl.set(url, {
+        id: `instagram:${shortcode}`,
+        url,
+        text: image?.alt || anchor.getAttribute("aria-label") || "",
+        imageUrl: image?.src || "",
+        imageWidth: image?.width,
+        imageHeight: image?.height,
+        timestampMs: timeValue ? Date.parse(timeValue) : undefined
+      });
+    }
+
+    return [...byUrl.values()];
+  }, username);
 }
 
 async function fetchYozmPosts(account) {
@@ -257,7 +366,7 @@ async function fetchYozmPosts(account) {
       id: id ? `yozm:${id}` : `yozm:${url}`,
       url,
       text: [title, description].filter(Boolean).join("\n\n"),
-      imageUrl: item?.thumbnail_image || "",
+      imageUrl: normalizeAbsoluteUrl(item?.thumbnail_image || "", account.profileUrl),
       timestampMs: Number.isFinite(published) ? published : undefined
     };
   });
@@ -544,7 +653,7 @@ function normalizePosts(posts, account) {
       id,
       url,
       text: cleanDiscordText(post.text || ""),
-      imageUrl: post.imageUrl || "",
+      imageUrl: normalizeAbsoluteUrl(post.imageUrl || "", account.profileUrl),
       imageWidth: Number.isFinite(post.imageWidth) ? post.imageWidth : undefined,
       imageHeight: Number.isFinite(post.imageHeight) ? post.imageHeight : undefined,
       timestampMs: Number.isFinite(post.timestampMs) ? post.timestampMs : undefined
@@ -639,6 +748,15 @@ function normalizePostUrl(value) {
   }
 }
 
+function normalizeAbsoluteUrl(value, baseUrl) {
+  if (!value) return "";
+  try {
+    return new URL(value, baseUrl).toString();
+  } catch {
+    return "";
+  }
+}
+
 function firstMeaningfulLine(text) {
   return (text || "")
     .split(/\r?\n/)
@@ -664,6 +782,29 @@ function cleanRssText(text) {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function parseInstagramCookies(cookieHeader) {
+  return cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const index = part.indexOf("=");
+      if (index === -1) return null;
+      const name = part.slice(0, index).trim();
+      const value = part.slice(index + 1).trim();
+      if (!name) return null;
+      return {
+        name,
+        value,
+        domain: ".instagram.com",
+        path: "/",
+        secure: true,
+        sameSite: "Lax"
+      };
+    })
+    .filter(Boolean);
 }
 
 function getCookieValue(cookie, name) {
