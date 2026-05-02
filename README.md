@@ -53,7 +53,6 @@ export DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_THREADS_CHOI_OPENAI="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_YOZM_AI="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_AITIMES_DIGEST="https://discord.com/api/webhooks/..."
-export INSTAGRAM_COOKIE="sessionid=...; ds_user_id=...; csrftoken=..."
 ```
 
 GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and variables > Actions**에 아래 Secrets를 등록합니다.
@@ -66,7 +65,6 @@ GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and varia
 | `DISCORD_WEBHOOK_THREADS_CHOI_OPENAI` | Threads `choi.openai` 알림 |
 | `DISCORD_WEBHOOK_YOZM_AI` | Yozm IT AI 알림 |
 | `DISCORD_WEBHOOK_AITIMES_DIGEST` | AI Times 일일 다이제스트 알림 |
-| `INSTAGRAM_COOKIE` | GitHub Actions에서 Instagram `401 require_login`이 발생할 때 사용하는 Instagram 로그인 쿠키 |
 
 ### 3. Initialize seen state
 
@@ -157,5 +155,5 @@ DRY_RUN=1 TARGET_DATE=2026-04-29 npm run aitimes:digest
 
 - `seen.json`은 중복 알림 방지를 위한 상태 파일입니다. 운영 중에는 GitHub Actions가 자동으로 갱신합니다.
 - Discord Webhook 환경 변수가 누락된 계정은 신규 게시물을 `seen.json`에 반영하지 않으므로, Webhook 설정 후 다시 실행하면 알림을 보낼 수 있습니다.
-- GitHub Actions에서 Instagram API가 `401 require_login`을 반환하면 `INSTAGRAM_COOKIE` Secret을 추가하거나 갱신해야 합니다. 브라우저에서 Instagram에 로그인한 뒤 요청 쿠키 값을 복사해 넣으면 됩니다.
+- Instagram은 로그인 쿠키 없이 공개 프로필 페이지를 크롤링합니다. Instagram이 특정 계정의 공개 페이지에서 게시물 링크를 숨기면 해당 실행에서는 그 계정을 건너뛰고 다음 실행 때 다시 시도합니다.
 - Instagram과 Threads 페이지 구조가 변경되면 수집 로직도 함께 조정해야 할 수 있습니다.

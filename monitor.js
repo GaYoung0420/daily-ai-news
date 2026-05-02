@@ -38,7 +38,7 @@ const ACCOUNTS = [
     key: "instagram:ai.ainow",
     platform: "Instagram",
     username: "ai.ainow",
-    profileUrl: "https://www.instagram.com/ai.ainow/",
+    profileUrl: "https://www.instagram.com/ai.ainow?igsh=MXUxNnpkY2RzbDBheQ==",
     webhookEnv: "DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW",
     color: 0xff5a5f,
     fetchPosts: fetchInstagramPosts
@@ -150,6 +150,16 @@ async function main(runMode) {
 }
 
 async function fetchInstagramPosts(account) {
+  const pagePosts = await fetchInstagramPostsFromPage(account);
+  if (pagePosts.length > 0) {
+    return pagePosts;
+  }
+
+  console.error(`[${account.key}] Instagram page crawl returned no posts; trying anonymous Instagram API fallback`);
+  return fetchInstagramPostsFromApi(account);
+}
+
+async function fetchInstagramPostsFromApi(account) {
   const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(account.username)}`;
   const headers = {
     "Accept": "*/*",
@@ -164,14 +174,6 @@ async function fetchInstagramPosts(account) {
     "X-IG-App-ID": "936619743392459"
   };
 
-  if (process.env.INSTAGRAM_COOKIE) {
-    headers.Cookie = process.env.INSTAGRAM_COOKIE;
-    const csrfToken = getCookieValue(process.env.INSTAGRAM_COOKIE, "csrftoken");
-    if (csrfToken) {
-      headers["X-CSRFToken"] = csrfToken;
-    }
-  }
-
   const response = await fetch(url, {
     headers
   });
@@ -180,9 +182,6 @@ async function fetchInstagramPosts(account) {
   console.log(`[${account.key}] Instagram API status=${response.status} bytes=${body.length}`);
 
   if (!response.ok) {
-    if (response.status === 401) {
-      throw new Error(`Instagram API returned 401; add/update GitHub Secret INSTAGRAM_COOKIE. Response: ${body.slice(0, 300)}`);
-    }
     throw new Error(`Instagram API returned ${response.status}: ${body.slice(0, 300)}`);
   }
 
@@ -200,8 +199,7 @@ async function fetchInstagramPosts(account) {
   }
   if (edges.length === 0) {
     const userKeys = Object.keys(json?.data?.user ?? {});
-    console.error(`[${account.key}] Instagram API returned 0 timeline edges; user keys=${userKeys.join(",")}; cookie may be incomplete or challenged`);
-    return fetchInstagramPostsFromPage(account);
+    console.error(`[${account.key}] Instagram API returned 0 timeline edges; user keys=${userKeys.join(",")}`);
   }
 
   return edges.slice(0, FETCH_LIMIT).map(({ node }) => {
@@ -216,11 +214,11 @@ async function fetchInstagramPosts(account) {
       imageUrl: node?.display_url ?? node?.thumbnail_src,
       timestampMs: takenAt
     };
-  });
+    });
 }
 
 async function fetchInstagramPostsFromPage(account) {
-  console.log(`[${account.key}] falling back to Instagram profile page crawl`);
+  console.log(`[${account.key}] crawling Instagram profile page`);
   const browser = await chromium.launch({
     headless: true,
     args: ["--disable-blink-features=AutomationControlled"]
@@ -232,10 +230,6 @@ async function fetchInstagramPostsFromPage(account) {
       locale: "ko-KR",
       viewport: { width: 1280, height: 1800 }
     });
-
-    if (process.env.INSTAGRAM_COOKIE) {
-      await context.addCookies(parseInstagramCookies(process.env.INSTAGRAM_COOKIE));
-    }
 
     const page = await context.newPage();
     const response = await page.goto(account.profileUrl, {
@@ -797,33 +791,6 @@ function cleanRssText(text) {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function parseInstagramCookies(cookieHeader) {
-  return cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => {
-      const index = part.indexOf("=");
-      if (index === -1) return null;
-      const name = part.slice(0, index).trim();
-      const value = part.slice(index + 1).trim();
-      if (!name) return null;
-      return {
-        name,
-        value,
-        domain: ".instagram.com",
-        path: "/",
-        secure: true,
-        sameSite: "Lax"
-      };
-    })
-    .filter(Boolean);
-}
-
-function getCookieValue(cookie, name) {
-  return cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1] || "";
 }
 
 function getDiscordRetryAfterMs(response, body) {
