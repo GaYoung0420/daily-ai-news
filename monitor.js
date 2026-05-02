@@ -11,6 +11,9 @@ const THREADS_SCROLL_PAUSE_MS = 900;
 const INSTAGRAM_PAGE_WAIT_MS = 5000;
 const DISCORD_DESCRIPTION_LIMIT = 4096;
 const DISCORD_TITLE_LIMIT = 256;
+const DISCORD_SEND_PAUSE_MS = 600;
+const DISCORD_MAX_SEND_ATTEMPTS = 5;
+const DISCORD_RATE_LIMIT_FALLBACK_MS = 1000;
 
 const ACCOUNTS = [
   {
@@ -126,6 +129,7 @@ async function main(runMode) {
         await sendDiscordEmbed(account, post, webhookUrl);
         changed = mergeSeen(entry, [post.id]) || changed;
         console.log(`[${account.key}] sent Discord alert: ${post.url}`);
+        await sleep(DISCORD_SEND_PAUSE_MS);
       } catch (error) {
         hadFailure = true;
         console.error(`[${account.key}] Discord send failed for ${post.url}: ${formatError(error)}`);
@@ -693,16 +697,27 @@ async function sendDiscordEmbed(account, post, webhookUrl) {
     }
   };
 
-  const response = await fetch(webhookUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+  for (let attempt = 1; attempt <= DISCORD_MAX_SEND_ATTEMPTS; attempt += 1) {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
 
-  const body = await response.text();
-  if (!response.ok) {
+    const body = await response.text();
+    if (response.ok) {
+      return;
+    }
+
+    if (response.status === 429 && attempt < DISCORD_MAX_SEND_ATTEMPTS) {
+      const retryAfterMs = getDiscordRetryAfterMs(response, body);
+      console.warn(`[${account.key}] Discord rate limited; retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${DISCORD_MAX_SEND_ATTEMPTS})`);
+      await sleep(retryAfterMs);
+      continue;
+    }
+
     throw new Error(`Discord returned ${response.status}: ${body.slice(0, 500)}`);
   }
 }
@@ -809,6 +824,30 @@ function parseInstagramCookies(cookieHeader) {
 
 function getCookieValue(cookie, name) {
   return cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1] || "";
+}
+
+function getDiscordRetryAfterMs(response, body) {
+  const headerValue = response.headers.get("retry-after") || response.headers.get("x-ratelimit-reset-after");
+  const headerSeconds = Number(headerValue);
+  if (Number.isFinite(headerSeconds) && headerSeconds > 0) {
+    return Math.ceil(headerSeconds * 1000) + 100;
+  }
+
+  try {
+    const json = JSON.parse(body);
+    const retryAfterSeconds = Number(json?.retry_after);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+      return Math.ceil(retryAfterSeconds * 1000) + 100;
+    }
+  } catch {
+    // Fall back below when Discord returns a non-JSON error body.
+  }
+
+  return DISCORD_RATE_LIMIT_FALLBACK_MS;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function truncate(text, limit) {
