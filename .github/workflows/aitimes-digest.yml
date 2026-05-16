@@ -4,6 +4,17 @@ on:
   schedule:
     # KST 08:10 daily
     - cron: "10 23 * * *"
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Target date in KST (YYYY-MM-DD). Leave empty for previous KST date."
+        required: false
+        type: string
+      dry_run:
+        description: "Print digest output without sending Discord messages."
+        required: true
+        default: true
+        type: boolean
 
 jobs:
   digest:
@@ -25,5 +36,7 @@ jobs:
       - name: Send AI Times digest
         env:
           DISCORD_WEBHOOK_AITIMES_DIGEST: ${{ secrets.DISCORD_WEBHOOK_AITIMES_DIGEST }}
+          DISCORD_TAG_AI_NEWS: ${{ secrets.DISCORD_TAG_AI_NEWS }}
           TARGET_DATE: ${{ github.event.inputs.target_date }}
+          DRY_RUN: ${{ github.event.inputs.dry_run && '1' || '0' }}
         run: npm run aitimes:digest

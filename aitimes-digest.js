@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import { buildForumWebhookFields, tagLabel } from "./tag-classifier.js";
 
 const FEED_URL = "https://cdn.aitimes.com/rss/gn_rss_allArticle.xml";
 const LIST_URL = "https://www.aitimes.com/news/articleList.html?sc_order_by=E&view_type=sm";
@@ -25,7 +26,9 @@ async function main() {
 
   if (dryRun) {
     for (const message of messages) {
-      console.log(message);
+      console.log(`[tag] ${tagLabel("AI_NEWS")}`);
+      console.log(`[title] ${message.title}`);
+      console.log(message.content);
       console.log("---");
     }
     return;
@@ -223,17 +226,25 @@ function buildDigestMessages(date, articles) {
   const header = `**AI 타임스 (${date})**`;
 
   if (articles.length === 0) {
-    return [`${header}\n\n전날 등록된 기사가 없습니다.`];
+    return [{
+      title: `AI 타임스 (${date})`,
+      content: `${header}\n\n전날 등록된 기사가 없습니다.`
+    }];
   }
 
   const lines = articles.map((article) => `- [${escapeMarkdownLinkText(article.title)}](${article.url})`);
   const messages = [];
   let current = `${header}\n\n`;
+  let part = 1;
 
   for (const line of lines) {
     const next = `${current}${line}\n`;
     if (next.length > DISCORD_CONTENT_LIMIT) {
-      messages.push(current.trimEnd());
+      messages.push({
+        title: `AI 타임스 (${date})${part > 1 ? ` ${part}` : ""}`,
+        content: current.trimEnd()
+      });
+      part += 1;
       current = `**AI 타임스 (${date}, 계속)**\n\n${line}\n`;
     } else {
       current = next;
@@ -241,20 +252,28 @@ function buildDigestMessages(date, articles) {
   }
 
   if (current.trim()) {
-    messages.push(current.trimEnd());
+    messages.push({
+      title: `AI 타임스 (${date})${part > 1 ? ` ${part}` : ""}`,
+      content: current.trimEnd()
+    });
   }
 
   return messages;
 }
 
-async function sendDiscordMessage(webhookUrl, content) {
+async function sendDiscordMessage(webhookUrl, message) {
   const response = await fetch(webhookUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      content,
+      ...buildForumWebhookFields({
+        title: message.title,
+        tagKey: "AI_NEWS",
+        requireTag: true
+      }),
+      content: message.content,
       allowed_mentions: {
         parse: []
       }

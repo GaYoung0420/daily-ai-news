@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
 import { XMLParser } from "fast-xml-parser";
+import { buildForumWebhookFields, classifySocialTagWithLlm, tagLabel } from "./tag-classifier.js";
 
 const SEEN_FILE = path.resolve("seen.json");
 const FETCH_LIMIT = 30;
@@ -9,6 +10,8 @@ const MAX_SEEN_PER_ACCOUNT = 200;
 const THREADS_MAX_SCROLLS = 6;
 const THREADS_SCROLL_PAUSE_MS = 900;
 const INSTAGRAM_PAGE_WAIT_MS = 5000;
+const INSTAGRAM_API_MAX_ATTEMPTS = 3;
+const INSTAGRAM_API_RETRY_BASE_MS = 4000;
 const DISCORD_DESCRIPTION_LIMIT = 4096;
 const DISCORD_TITLE_LIMIT = 256;
 const DISCORD_SEND_PAUSE_MS = 600;
@@ -86,6 +89,7 @@ async function main(runMode) {
     try {
       posts = await account.fetchPosts(account);
     } catch (error) {
+      hadFailure = true;
       console.error(`[${account.key}] fetch failed; keeping existing seen state unchanged: ${formatError(error)}`);
       continue;
     }
@@ -94,6 +98,7 @@ async function main(runMode) {
     console.log(`[${account.key}] extracted ${posts.length} post(s)`);
 
     if (posts.length === 0) {
+      hadFailure = true;
       console.error(`[${account.key}] no posts found; keeping existing seen state unchanged`);
       continue;
     }
@@ -101,6 +106,7 @@ async function main(runMode) {
     const entry = ensureSeenEntry(seen, account.key);
     const known = new Set(entry.items);
     const latestIds = posts.map((post) => post.id);
+    console.log(`[${account.key}] latest fetched id/url(s): ${latestIds.slice(0, 3).join(", ")}`);
 
     if (runMode === "seed") {
       changed = mergeSeen(entry, latestIds) || changed;
@@ -174,12 +180,25 @@ async function fetchInstagramPostsFromApi(account) {
     "X-IG-App-ID": "936619743392459"
   };
 
-  const response = await fetch(url, {
-    headers
-  });
+  let response;
+  let body = "";
 
-  const body = await response.text();
-  console.log(`[${account.key}] Instagram API status=${response.status} bytes=${body.length}`);
+  for (let attempt = 1; attempt <= INSTAGRAM_API_MAX_ATTEMPTS; attempt += 1) {
+    response = await fetch(url, {
+      headers
+    });
+
+    body = await response.text();
+    console.log(`[${account.key}] Instagram API status=${response.status} bytes=${body.length} attempt=${attempt}/${INSTAGRAM_API_MAX_ATTEMPTS}`);
+
+    if (response.ok || !shouldRetryInstagramApi(response.status) || attempt === INSTAGRAM_API_MAX_ATTEMPTS) {
+      break;
+    }
+
+    const retryAfterMs = getRetryAfterMs(response) ?? INSTAGRAM_API_RETRY_BASE_MS * attempt;
+    console.warn(`[${account.key}] Instagram API retrying in ${retryAfterMs}ms after status=${response.status}`);
+    await sleep(retryAfterMs);
+  }
 
   if (!response.ok) {
     throw new Error(`Instagram API returned ${response.status}: ${body.slice(0, 300)}`);
@@ -243,7 +262,7 @@ async function fetchInstagramPostsFromPage(account) {
 
     if (posts.length === 0) {
       const html = await page.content();
-      console.error(`[${account.key}] Instagram page crawl found no /${account.username}/p/ or /reel/ links; rendered html bytes=${html.length}`);
+      console.error(`[${account.key}] Instagram page crawl found no /p/ or /reel/ links; rendered html bytes=${html.length}`);
       console.error(`[${account.key}] html sample=${html.slice(0, 500).replace(/\s+/g, " ")}`);
     }
 
@@ -260,9 +279,10 @@ async function extractInstagramPosts(page, username) {
     const canonicalPostUrl = (href) => {
       try {
         const url = new URL(href, location.href);
-        const match = url.pathname.match(new RegExp(`^/${usernamePattern}/(p|reel)/([^/]+)/?$`));
+        const match = url.pathname.match(new RegExp(`^/(?:${usernamePattern}/)?(p|reel)/([^/]+)/?$`));
         if (!match) return null;
-        url.pathname = `/${username}/${match[1]}/${match[2]}/`;
+        url.hostname = "www.instagram.com";
+        url.pathname = `/${match[1]}/${match[2]}/`;
         url.search = "";
         url.hash = "";
         return url.toString();
@@ -278,7 +298,14 @@ async function extractInstagramPosts(page, username) {
     };
 
     const anchors = [
-      ...document.querySelectorAll(`a[href*="/${username}/p/"], a[href*="/${username}/reel/"]`)
+      ...document.querySelectorAll([
+        `a[href*="/${username}/p/"]`,
+        `a[href*="/${username}/reel/"]`,
+        "a[href^='/p/']",
+        "a[href^='/reel/']",
+        "a[href*='instagram.com/p/']",
+        "a[href*='instagram.com/reel/']"
+      ].join(", "))
     ];
     const byUrl = new Map();
 
@@ -666,6 +693,16 @@ async function sendDiscordEmbed(account, post, webhookUrl) {
   const description = truncate(post.text || `${account.platform} @${account.username} 새 게시물`, DISCORD_DESCRIPTION_LIMIT);
   const title = truncate(firstMeaningfulLine(post.text) || `${account.platform} @${account.username} 새 게시물`, DISCORD_TITLE_LIMIT);
   const host = new URL(account.profileUrl).hostname.replace(/^www\./, "");
+  const classification = await classifySocialTagWithLlm({
+    title,
+    text: description,
+    source: `${account.platform} @${account.username}`
+  });
+  const tagKey = classification.tagKey;
+  const forumTitle = `${tagLabel(tagKey)} | ${title}`;
+  if (classification.method !== "llm") {
+    console.warn(`[${account.key}] tag classified by fallback rules: ${classification.reason}`);
+  }
 
   const embed = {
     title,
@@ -685,6 +722,11 @@ async function sendDiscordEmbed(account, post, webhookUrl) {
   }
 
   const payload = {
+    ...buildForumWebhookFields({
+      title: forumTitle,
+      tagKey,
+      requireTag: true
+    }),
     embeds: [embed],
     allowed_mentions: {
       parse: []
@@ -811,6 +853,16 @@ function getDiscordRetryAfterMs(response, body) {
   }
 
   return DISCORD_RATE_LIMIT_FALLBACK_MS;
+}
+
+function shouldRetryInstagramApi(status) {
+  return status === 429 || status === 408 || status >= 500;
+}
+
+function getRetryAfterMs(response) {
+  const headerValue = response.headers.get("retry-after") || response.headers.get("x-ratelimit-reset-after");
+  const seconds = Number(headerValue);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) + 100 : null;
 }
 
 function sleep(ms) {

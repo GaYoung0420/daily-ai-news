@@ -4,9 +4,11 @@ AI 관련 새 게시물을 자동으로 모니터링하고 Discord Webhook으로
 
 ## Features
 
-- **소셜 계정 모니터링**: Instagram, Threads 계정의 최신 게시물을 확인하고 신규 게시물만 Discord embed로 알림을 전송합니다.
-- **Yozm IT 수집**: Yozm IT AI API를 조회해 새 글을 Discord로 전달합니다.
-- **AI Times 일일 다이제스트**: KST 기준 전날 등록된 AI타임스 기사를 모아 Discord 링크 목록으로 발송합니다.
+- **소셜 계정 모니터링**: Instagram, Threads 계정의 최신 게시물을 확인하고 신규 게시물만 Discord 포럼 게시물로 전송합니다.
+- **Yozm IT 수집**: Yozm IT AI API를 조회해 새 글을 Discord 포럼 게시물로 전달합니다.
+- **AI Times 일일 다이제스트**: KST 기준 전날 등록된 AI타임스 기사를 모아 Discord 포럼 게시물로 발송합니다.
+- **포럼 태그 자동 적용**: AI타임스는 `AI 뉴스` 태그를 고정 적용하고, 소셜/요즘IT는 Claude Haiku 4.5로 태그 1개를 예측합니다.
+- **키워드 fallback**: Anthropic API 키가 없거나 LLM 호출이 실패하면 로컬 키워드 룰로 태그를 분류합니다.
 - **중복 알림 방지**: `seen.json`에 이미 처리한 게시물 ID를 저장해 동일 콘텐츠가 반복 전송되지 않도록 관리합니다.
 - **Seed 모드 지원**: 현재 최신 게시물을 상태 파일에만 저장하고 Discord 알림은 보내지 않아 초기 세팅 시 불필요한 알림을 방지합니다.
 - **GitHub Actions 자동 실행**: 매일 정해진 시간대에 자동으로 모니터링과 다이제스트 작업을 실행합니다.
@@ -19,6 +21,7 @@ AI 관련 새 게시물을 자동으로 모니터링하고 Discord Webhook으로
 - **Automation**: GitHub Actions
 - **Browser Automation**: Playwright Chromium
 - **Feed Parsing**: fast-xml-parser
+- **LLM Classification**: Claude Haiku 4.5 (`claude-haiku-4-5-20251001`)
 - **Notification**: Discord Webhook
 - **State Storage**: JSON file (`seen.json`)
 
@@ -53,11 +56,25 @@ export DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_THREADS_CHOI_OPENAI="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_YOZM_AI="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_AITIMES_DIGEST="https://discord.com/api/webhooks/..."
+export ANTHROPIC_API_KEY="..."
+export ANTHROPIC_TAG_MODEL="claude-haiku-4-5-20251001"
+export DISCORD_TAG_AI_NEWS="..."
+export DISCORD_TAG_AI_CODING="..."
+export DISCORD_TAG_PROMPT_TIPS="..."
+export DISCORD_TAG_AGENT_AUTOMATION="..."
+export DISCORD_TAG_MODEL_SERVICE="..."
+export DISCORD_TAG_BUSINESS_INVESTMENT="..."
+export DISCORD_TAG_INFRA_SEMICONDUCTOR="..."
+export DISCORD_TAG_POLICY_REGULATION="..."
+export DISCORD_TAG_SECURITY_SAFETY="..."
+export DISCORD_TAG_USE_CASE="..."
 ```
 
-GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and variables > Actions**에 아래 Secrets를 등록합니다.
+GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and variables > Actions**에 아래 값을 등록합니다. 토큰과 Webhook, 태그 ID는 Secrets에 넣고, `ANTHROPIC_TAG_MODEL`은 Variables에 넣어도 됩니다.
 
-| Secret | Purpose |
+포럼 게시물로 올리려면 각 Webhook은 Discord 포럼 채널에 연결되어 있어야 하며, 태그 Secret 값은 태그 이름이 아니라 Discord의 포럼 태그 ID입니다.
+
+| Name | Purpose |
 | --- | --- |
 | `DISCORD_WEBHOOK_INSTAGRAM_AI_FREAKS` | Instagram `ai_freaks.kr` 알림 |
 | `DISCORD_WEBHOOK_INSTAGRAM_PROMPPY` | Instagram `promppy_com` 알림 |
@@ -65,6 +82,37 @@ GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and varia
 | `DISCORD_WEBHOOK_THREADS_CHOI_OPENAI` | Threads `choi.openai` 알림 |
 | `DISCORD_WEBHOOK_YOZM_AI` | Yozm IT AI 알림 |
 | `DISCORD_WEBHOOK_AITIMES_DIGEST` | AI Times 일일 다이제스트 알림 |
+| `ANTHROPIC_API_KEY` | 소셜/요즘IT 태그 예측용 Anthropic API 키 |
+| `ANTHROPIC_TAG_MODEL` | 선택 사항. 태그 예측 모델. 기본값은 `claude-haiku-4-5-20251001` |
+| `DISCORD_TAG_AI_NEWS` | AI타임스 전용 `AI 뉴스` 포럼 태그 ID |
+| `DISCORD_TAG_AI_CODING` | `AI코딩` 포럼 태그 ID |
+| `DISCORD_TAG_PROMPT_TIPS` | `프롬프트·활용팁` 포럼 태그 ID |
+| `DISCORD_TAG_AGENT_AUTOMATION` | `에이전트·자동화` 포럼 태그 ID |
+| `DISCORD_TAG_MODEL_SERVICE` | `모델·서비스` 포럼 태그 ID |
+| `DISCORD_TAG_BUSINESS_INVESTMENT` | `비즈니스·투자` 포럼 태그 ID |
+| `DISCORD_TAG_INFRA_SEMICONDUCTOR` | `인프라·반도체` 포럼 태그 ID |
+| `DISCORD_TAG_POLICY_REGULATION` | `정책·규제` 포럼 태그 ID |
+| `DISCORD_TAG_SECURITY_SAFETY` | `보안·안전` 포럼 태그 ID |
+| `DISCORD_TAG_USE_CASE` | `활용사례` 포럼 태그 ID |
+
+### Forum tag rules
+
+각 Discord 포럼 게시물에는 태그를 1개만 적용합니다.
+
+| Tag | Applied to |
+| --- | --- |
+| `AI 뉴스` | AI타임스 다이제스트 전용 |
+| `프롬프트·활용팁` | 프롬프트, 명령어, 사용법, 설정법, 실전 팁 |
+| `AI코딩` | Codex, Claude Code, IDE, 개발 도구, 코딩 자동화 |
+| `에이전트·자동화` | AI 에이전트, 자율 실행, 업무 자동화 |
+| `모델·서비스` | GPT, Claude, Gemini, Grok, Sora 등 모델/서비스 |
+| `비즈니스·투자` | 투자, 상장, 인수합병, 파트너십, 실적 |
+| `인프라·반도체` | GPU, NPU, 데이터센터, 클라우드, 전력 |
+| `정책·규제` | 정부 정책, 규제, 소송, 국가 전략 |
+| `보안·안전` | 보안 취약점, AI 안전성, 프라이버시, 악용 위험 |
+| `활용사례` | 위 분류에 걸리지 않는 실무 활용 사례 |
+
+소셜/요즘IT 태그는 Claude Haiku 4.5의 Claude API ID `claude-haiku-4-5-20251001`로 먼저 예측합니다. `ANTHROPIC_API_KEY`가 없거나 API 호출이 실패하면 [tag-classifier.js](/Users/kimgayoung/Github/daily-ai-news/tag-classifier.js)의 키워드 룰로 fallback합니다. LLM 호출에는 같은 파일의 `TAG_CLASSIFICATION_PROMPT`를 시스템 프롬프트로 사용하고, 모델 응답의 `tag`가 위 허용 태그 중 하나인지 검증한 뒤 적용합니다.
 
 ### 3. Initialize seen state
 
@@ -125,7 +173,9 @@ DRY_RUN=1 TARGET_DATE=2026-04-29 npm run aitimes:digest
 
 - 매일 KST 08:10 실행
 - UTC cron: `10 23 * * *`
-- 정기 스케줄로만 실행되며, 특정 날짜 확인은 로컬에서 `TARGET_DATE`와 `DRY_RUN=1`로 검증합니다.
+- 수동 실행 시 `target_date`와 `dry_run`을 지정할 수 있습니다.
+- GitHub Actions 테스트는 `dry_run=true`로 먼저 실행하면 Discord 전송 없이 수집/포맷 결과만 로그로 확인할 수 있습니다.
+- 실제 포럼 게시물 전송까지 확인하려면 `dry_run=false`로 실행합니다.
 
 ## Project Structure
 
@@ -136,6 +186,7 @@ DRY_RUN=1 TARGET_DATE=2026-04-29 npm run aitimes:digest
 │   └── social-monitor.yml
 ├── aitimes-digest.js
 ├── monitor.js
+├── tag-classifier.js
 ├── seen.json
 ├── package-lock.json
 ├── package.json
@@ -155,5 +206,7 @@ DRY_RUN=1 TARGET_DATE=2026-04-29 npm run aitimes:digest
 
 - `seen.json`은 중복 알림 방지를 위한 상태 파일입니다. 운영 중에는 GitHub Actions가 자동으로 갱신합니다.
 - Discord Webhook 환경 변수가 누락된 계정은 신규 게시물을 `seen.json`에 반영하지 않으므로, Webhook 설정 후 다시 실행하면 알림을 보낼 수 있습니다.
+- Discord 포럼 태그 ID가 누락되면 태그 없는 게시물을 보내지 않고 실행을 실패시켜 설정 누락을 드러냅니다.
+- `ANTHROPIC_API_KEY`가 누락되거나 Anthropic API 호출이 실패하면 태그 예측만 키워드 룰로 대체하고 Discord 전송은 계속 진행합니다.
 - Instagram은 로그인 쿠키 없이 공개 프로필 페이지를 크롤링합니다. Instagram이 특정 계정의 공개 페이지에서 게시물 링크를 숨기면 해당 실행에서는 그 계정을 건너뛰고 다음 실행 때 다시 시도합니다.
 - Instagram과 Threads 페이지 구조가 변경되면 수집 로직도 함께 조정해야 할 수 있습니다.
