@@ -13,6 +13,7 @@ const INSTAGRAM_PAGE_WAIT_MS = 5000;
 const INSTAGRAM_API_MAX_ATTEMPTS = 3;
 const INSTAGRAM_API_RETRY_BASE_MS = 4000;
 const DISCORD_DESCRIPTION_LIMIT = 4096;
+const DISCORD_CONTENT_LIMIT = 2000;
 const DISCORD_TITLE_LIMIT = 256;
 const DISCORD_SEND_PAUSE_MS = 600;
 const DISCORD_MAX_SEND_ATTEMPTS = 5;
@@ -144,7 +145,7 @@ async function main(runMode) {
 
     for (const post of newPosts) {
       try {
-        await sendDiscordEmbed(account, post, webhookUrl);
+        await sendDiscordForumPost(account, post, webhookUrl);
         changed = mergeSeen(entry, [post.id]) || changed;
         console.log(`[${account.key}] sent Discord alert: ${post.url}`);
         await sleep(DISCORD_SEND_PAUSE_MS);
@@ -704,11 +705,9 @@ function normalizePosts(posts, account) {
   return result;
 }
 
-async function sendDiscordEmbed(account, post, webhookUrl) {
-  const timestamp = post.timestampMs ? new Date(post.timestampMs).toISOString() : new Date().toISOString();
+async function sendDiscordForumPost(account, post, webhookUrl) {
   const description = truncate(post.text || `${account.platform} @${account.username} 새 게시물`, DISCORD_DESCRIPTION_LIMIT);
   const title = truncate(firstMeaningfulLine(post.text) || `${account.platform} @${account.username} 새 게시물`, DISCORD_TITLE_LIMIT);
-  const host = new URL(account.profileUrl).hostname.replace(/^www\./, "");
   const classification = await classifySocialTagWithLlm({
     title,
     text: description,
@@ -720,30 +719,17 @@ async function sendDiscordEmbed(account, post, webhookUrl) {
     console.warn(`[${account.key}] tag classified by fallback rules: ${classification.reason}`);
   }
 
-  const embed = {
-    title,
-    url: post.url,
-    description,
-    color: account.color,
-    footer: {
-      text: `${account.username} | ${host}`
-    },
-    timestamp
-  };
-
-  if (post.imageUrl && shouldUseLargeEmbedImage(post)) {
-    embed.image = { url: post.imageUrl };
-  } else if (post.imageUrl) {
-    embed.thumbnail = { url: post.imageUrl };
-  }
-
   const payload = {
     ...buildForumWebhookFields({
       title: forumTitle,
       tagKey,
       requireTag: true
     }),
-    embeds: [embed],
+    content: buildDiscordPostContent({
+      account,
+      post,
+      description
+    }),
     allowed_mentions: {
       parse: []
     }
@@ -772,6 +758,16 @@ async function sendDiscordEmbed(account, post, webhookUrl) {
 
     throw new Error(`Discord returned ${response.status}: ${body.slice(0, 500)}`);
   }
+}
+
+function buildDiscordPostContent({ account, post, description }) {
+  const host = new URL(account.profileUrl).hostname.replace(/^www\./, "");
+  const sourceLine = `출처: ${account.platform} @${account.username} (${host})`;
+  const linkLine = `원문: ${post.url}`;
+  const suffix = `\n\n${linkLine}\n${sourceLine}`;
+  const bodyLimit = Math.max(0, DISCORD_CONTENT_LIMIT - suffix.length);
+
+  return `${truncate(description, bodyLimit)}${suffix}`;
 }
 
 async function readSeen() {
@@ -892,12 +888,6 @@ function sleep(ms) {
 function truncate(text, limit) {
   if (!text || text.length <= limit) return text;
   return `${text.slice(0, Math.max(0, limit - 1))}…`;
-}
-
-function shouldUseLargeEmbedImage(post) {
-  if (!post.imageWidth || !post.imageHeight) return true;
-  const ratio = post.imageWidth / post.imageHeight;
-  return ratio >= 0.45 && ratio <= 2.2;
 }
 
 function formatError(error) {
