@@ -69,6 +69,14 @@ const ACCOUNTS = [
 
 const mode = process.argv[2] ?? "check";
 
+class TransientFetchError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TransientFetchError";
+    this.transient = true;
+  }
+}
+
 if (!["check", "seed"].includes(mode)) {
   console.error(`Unknown mode "${mode}". Use "check" or "seed".`);
   process.exit(1);
@@ -89,8 +97,12 @@ async function main(runMode) {
     try {
       posts = await account.fetchPosts(account);
     } catch (error) {
-      hadFailure = true;
-      console.error(`[${account.key}] fetch failed; keeping existing seen state unchanged: ${formatError(error)}`);
+      if (isTransientFetchError(error)) {
+        console.warn(`[${account.key}] fetch skipped after transient error; keeping existing seen state unchanged: ${formatError(error)}`);
+      } else {
+        hadFailure = true;
+        console.error(`[${account.key}] fetch failed; keeping existing seen state unchanged: ${formatError(error)}`);
+      }
       continue;
     }
 
@@ -201,7 +213,11 @@ async function fetchInstagramPostsFromApi(account) {
   }
 
   if (!response.ok) {
-    throw new Error(`Instagram API returned ${response.status}: ${body.slice(0, 300)}`);
+    const message = `Instagram API returned ${response.status}: ${body.slice(0, 300)}`;
+    if (shouldRetryInstagramApi(response.status)) {
+      throw new TransientFetchError(message);
+    }
+    throw new Error(message);
   }
 
   let json;
@@ -857,6 +873,10 @@ function getDiscordRetryAfterMs(response, body) {
 
 function shouldRetryInstagramApi(status) {
   return status === 429 || status === 408 || status >= 500;
+}
+
+function isTransientFetchError(error) {
+  return error instanceof TransientFetchError || error?.transient === true;
 }
 
 function getRetryAfterMs(response) {
