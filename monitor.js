@@ -12,6 +12,8 @@ const THREADS_SCROLL_PAUSE_MS = 900;
 const INSTAGRAM_PAGE_WAIT_MS = 5000;
 const INSTAGRAM_API_MAX_ATTEMPTS = 3;
 const INSTAGRAM_API_RETRY_BASE_MS = 4000;
+const HADA_BASE_URL = "https://news.hada.io";
+const HADA_PAGES = [1, 2];
 const DISCORD_DESCRIPTION_LIMIT = 4096;
 const DISCORD_CONTENT_LIMIT = 2000;
 const DISCORD_TITLE_LIMIT = 256;
@@ -65,6 +67,16 @@ const ACCOUNTS = [
     webhookEnv: "DISCORD_WEBHOOK_YOZM_AI",
     color: 0x5a00db,
     fetchPosts: fetchYozmPosts
+  },
+  {
+    key: "hada:links",
+    platform: "GeekNews",
+    username: "GeekNews",
+    profileUrl: "https://news.hada.io/new?page=1",
+    webhookEnv: "DISCORD_WEBHOOK_HADA_LINKS",
+    color: 0x1d74f5,
+    fetchPosts: fetchHadaLinkPosts,
+    buildContent: buildHadaDiscordPostContent
   }
 ];
 
@@ -454,6 +466,216 @@ async function fetchRssPosts(account) {
   });
 }
 
+async function fetchHadaLinkPosts(account) {
+  const posts = [];
+
+  for (const page of HADA_PAGES) {
+    const url = `${HADA_BASE_URL}/new?page=${page}`;
+    const response = await fetch(url, {
+      headers: {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": HADA_BASE_URL,
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+      }
+    });
+
+    const body = await response.text();
+    console.log(`[${account.key}] Hada new page=${page} status=${response.status} bytes=${body.length}`);
+
+    if (!response.ok) {
+      throw new Error(`Hada new page ${page} returned ${response.status}: ${body.slice(0, 300)}`);
+    }
+
+    posts.push(...parseHadaLinkPosts(body, account.profileUrl));
+  }
+
+  const latestPosts = posts.slice(0, FETCH_LIMIT);
+  await enrichHadaPostSummaries(latestPosts, account);
+  return latestPosts;
+}
+
+function parseHadaLinkPosts(html, baseUrl) {
+  const rows = splitHadaTopicRows(html);
+
+  return rows
+    .map((row) => parseHadaTopicRow(row, baseUrl))
+    .filter(Boolean);
+}
+
+function splitHadaTopicRows(html) {
+  const marker = "<div class='topic_row'";
+  const starts = [];
+  let index = html.indexOf(marker);
+
+  while (index !== -1) {
+    starts.push(index);
+    index = html.indexOf(marker, index + marker.length);
+  }
+
+  return starts.map((start, idx) => html.slice(start, starts[idx + 1] ?? html.length));
+}
+
+function parseHadaTopicRow(row, baseUrl) {
+  const topicId = row.match(/data-topic-state-id=['"](\d+)['"]/)?.[1];
+  const titleBlock = row.match(/<div class=topictitle[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? "";
+  const titleAnchor = titleBlock.match(/<a\b([^>]*)>[\s\S]*?<h2[^>]*>([\s\S]*?)<\/h2>[\s\S]*?<\/a>/);
+  const href = getHtmlAttribute(titleAnchor?.[1] ?? "", "href");
+  const externalUrl = normalizeExternalHadaUrl(href, baseUrl);
+
+  if (!topicId || !externalUrl) {
+    return null;
+  }
+
+  const title = cleanHtmlText(titleAnchor?.[2] ?? "");
+  const summary = cleanHtmlText(row.match(/<div class='topicdesc'>[\s\S]*?<a\b[^>]*>([\s\S]*?)<\/a>/)?.[1] ?? "");
+  const timeText = cleanHtmlText(row.match(/<div class='topicinfo'>[\s\S]*?<span[^>]*>\d+<\/span>\s*point by[\s\S]*?<\/a>\s*([^<|]+)/)?.[1] ?? "");
+
+  return {
+    id: `hada:${topicId}`,
+    url: buildHadaTopicUrl(topicId),
+    title,
+    summary,
+    text: [title, summary].filter(Boolean).join("\n\n"),
+    externalUrl,
+    preserveUrlQuery: true,
+    timestampMs: parseHadaRelativeTime(timeText)
+  };
+}
+
+async function enrichHadaPostSummaries(posts, account) {
+  for (const post of posts) {
+    try {
+      const response = await fetch(post.url, {
+        headers: {
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+          "Referer": account.profileUrl,
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        }
+      });
+
+      const body = await response.text();
+      if (!response.ok) {
+        console.warn(`[${account.key}] Hada topic detail ${post.id} returned ${response.status}; using list summary`);
+        continue;
+      }
+
+      const detailSummary = extractHadaDetailSummary(body);
+      if (detailSummary) {
+        post.summary = detailSummary;
+        post.text = [post.title, post.summary].filter(Boolean).join("\n\n");
+      }
+    } catch (error) {
+      console.warn(`[${account.key}] Hada topic detail ${post.id} failed; using list summary: ${formatError(error)}`);
+    }
+  }
+}
+
+function extractHadaDetailSummary(html) {
+  const contents = html.match(/<div id='topic_contents'>([\s\S]*?)<\/div>\s*<\/div>/)?.[1] ?? "";
+  if (!contents) return "";
+
+  const listItems = [...contents.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)]
+    .map((match) => cleanHtmlText(match[1]))
+    .filter(Boolean);
+
+  if (listItems.length > 0) {
+    return listItems.join("\n");
+  }
+
+  return cleanHtmlText(contents);
+}
+
+function normalizeExternalHadaUrl(href, baseUrl) {
+  if (!href) return "";
+
+  try {
+    const url = new URL(decodeHtmlEntities(href), baseUrl);
+    if (!/^https?:$/.test(url.protocol)) return "";
+    if (url.hostname === "news.hada.io") return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function buildHadaTopicUrl(topicId) {
+  const url = new URL("/topic", HADA_BASE_URL);
+  url.searchParams.set("id", topicId);
+  url.searchParams.set("utm_source", "discord");
+  url.searchParams.set("utm_medium", "bot");
+  return url.toString();
+}
+
+function buildHadaDiscordPostContent({ post, description }) {
+  const title = post.title || firstMeaningfulLine(description) || "GeekNews 새 링크";
+  const bullets = buildHadaSummaryBullets(post.summary || description);
+  const body = [
+    `[${escapeMarkdownLinkText(title)}](${post.url})`,
+    bullets
+  ].filter(Boolean).join("\n\n");
+
+  return truncate(body, DISCORD_CONTENT_LIMIT);
+}
+
+function buildHadaSummaryBullets(text) {
+  const sentences = splitSummarySentences(text).slice(0, 4);
+  return sentences.map((sentence) => `- ${sentence}`).join("\n");
+}
+
+function splitSummarySentences(text) {
+  const value = cleanDiscordText(text || "");
+  if (!value) return [];
+
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length > 1) {
+    return lines;
+  }
+
+  const normalized = value
+    .replace(/\s*([.!?。！？])\s+/g, "$1\n")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+
+  const sentenceParts = normalized
+    .split(/\n|(?<=[다요임함됨음봄낌짐룸함])(?=[A-Z가-힣0-9"'])/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (sentenceParts.length > 1) {
+    return sentenceParts;
+  }
+
+  return value
+    .split(/\s{2,}|[•·]\s*/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseHadaRelativeTime(text) {
+  const match = String(text || "").match(/(\d+)\s*(분|시간|일|주|개월|년)전/);
+  if (!match) return undefined;
+
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return undefined;
+
+  const unitMs = {
+    "분": 60 * 1000,
+    "시간": 60 * 60 * 1000,
+    "일": 24 * 60 * 60 * 1000,
+    "주": 7 * 24 * 60 * 60 * 1000,
+    "개월": 30 * 24 * 60 * 60 * 1000,
+    "년": 365 * 24 * 60 * 60 * 1000
+  }[match[2]];
+
+  return unitMs ? Date.now() - value * unitMs : undefined;
+}
+
 async function fetchThreadsPosts(account) {
   const browser = await chromium.launch({
     headless: true,
@@ -686,7 +908,7 @@ function normalizePosts(posts, account) {
 
   for (const post of posts) {
     if (!post?.url && !post?.id) continue;
-    const url = normalizePostUrl(post.url || account.profileUrl);
+    const url = post.preserveUrlQuery ? normalizePostUrlWithQuery(post.url || account.profileUrl) : normalizePostUrl(post.url || account.profileUrl);
     const id = post.id || url;
     if (seenIds.has(id)) continue;
     seenIds.add(id);
@@ -694,6 +916,10 @@ function normalizePosts(posts, account) {
     result.push({
       id,
       url,
+      title: cleanDiscordText(post.title || ""),
+      summary: cleanDiscordText(post.summary || ""),
+      externalUrl: normalizeAbsoluteUrl(post.externalUrl || "", account.profileUrl),
+      preserveUrlQuery: Boolean(post.preserveUrlQuery),
       text: cleanDiscordText(post.text || ""),
       imageUrl: normalizeAbsoluteUrl(post.imageUrl || "", account.profileUrl),
       imageWidth: Number.isFinite(post.imageWidth) ? post.imageWidth : undefined,
@@ -706,8 +932,8 @@ function normalizePosts(posts, account) {
 }
 
 async function sendDiscordForumPost(account, post, webhookUrl) {
-  const description = truncate(post.text || `${account.platform} @${account.username} 새 게시물`, DISCORD_DESCRIPTION_LIMIT);
-  const title = truncate(firstMeaningfulLine(post.text) || `${account.platform} @${account.username} 새 게시물`, DISCORD_TITLE_LIMIT);
+  const description = truncate(post.summary || post.text || `${account.platform} @${account.username} 새 게시물`, DISCORD_DESCRIPTION_LIMIT);
+  const title = truncate(post.title || firstMeaningfulLine(post.text) || `${account.platform} @${account.username} 새 게시물`, DISCORD_TITLE_LIMIT);
   const classification = await classifySocialTagWithLlm({
     title,
     text: description,
@@ -725,7 +951,7 @@ async function sendDiscordForumPost(account, post, webhookUrl) {
       tagKey,
       requireTag: true
     }),
-    content: buildDiscordPostContent({
+    content: (account.buildContent ?? buildDiscordPostContent)({
       account,
       post,
       description
@@ -811,6 +1037,16 @@ function normalizePostUrl(value) {
   }
 }
 
+function normalizePostUrlWithQuery(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
 function normalizeAbsoluteUrl(value, baseUrl) {
   if (!value) return "";
   try {
@@ -845,6 +1081,33 @@ function cleanRssText(text) {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function cleanHtmlText(text) {
+  return decodeHtmlEntities(String(text).replace(/<[^>]*>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeHtmlEntities(text) {
+  return String(text)
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number.parseInt(code, 10)));
+}
+
+function getHtmlAttribute(attributes, name) {
+  const pattern = new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, "i");
+  return decodeHtmlEntities(attributes.match(pattern)?.[2] ?? "");
+}
+
+function escapeMarkdownLinkText(text) {
+  return String(text).replace(/[[\]\\]/g, "\\$&");
 }
 
 function getDiscordRetryAfterMs(response, body) {

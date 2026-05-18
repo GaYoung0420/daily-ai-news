@@ -6,8 +6,9 @@ AI 관련 새 게시물을 자동으로 모니터링하고 Discord Webhook으로
 
 - **소셜 계정 모니터링**: Instagram, Threads 계정의 최신 게시물을 확인하고 신규 게시물만 Discord 포럼 게시물로 전송합니다.
 - **Yozm IT 수집**: Yozm IT AI API를 조회해 새 글을 Discord 포럼 게시물로 전달합니다.
+- **GeekNews 링크 수집**: GeekNews 새 소식 1-2페이지에서 외부 원문 링크가 있는 글만 Discord 포럼 게시물로 전달합니다.
 - **AI Times 일일 다이제스트**: KST 기준 전날 등록된 AI타임스 기사를 모아 Discord 포럼 게시물로 발송합니다.
-- **포럼 태그 자동 적용**: AI타임스는 `AI 뉴스` 태그를 고정 적용하고, 소셜/요즘IT는 Claude Haiku 4.5로 태그 1개를 예측합니다.
+- **포럼 태그 자동 적용**: AI타임스는 `AI 뉴스` 태그를 고정 적용하고, 소셜/요즘IT/GeekNews는 Claude Haiku 4.5로 태그 1개를 예측합니다.
 - **키워드 fallback**: Anthropic API 키가 없거나 LLM 호출이 실패하면 로컬 키워드 룰로 태그를 분류합니다.
 - **중복 알림 방지**: `seen.json`에 이미 처리한 게시물 ID를 저장해 동일 콘텐츠가 반복 전송되지 않도록 관리합니다.
 - **Seed 모드 지원**: 현재 최신 게시물을 상태 파일에만 저장하고 Discord 알림은 보내지 않아 초기 세팅 시 불필요한 알림을 방지합니다.
@@ -55,6 +56,7 @@ export DISCORD_WEBHOOK_INSTAGRAM_PROMPPY="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_THREADS_CHOI_OPENAI="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_YOZM_AI="https://discord.com/api/webhooks/..."
+export DISCORD_WEBHOOK_HADA_LINKS="https://discord.com/api/webhooks/..."
 export DISCORD_WEBHOOK_AITIMES_DIGEST="https://discord.com/api/webhooks/..."
 export ANTHROPIC_API_KEY="..."
 export ANTHROPIC_TAG_MODEL="claude-haiku-4-5-20251001"
@@ -81,6 +83,7 @@ GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and varia
 | `DISCORD_WEBHOOK_INSTAGRAM_AI_AINOW` | Instagram `ai.ainow` 알림 |
 | `DISCORD_WEBHOOK_THREADS_CHOI_OPENAI` | Threads `choi.openai` 알림 |
 | `DISCORD_WEBHOOK_YOZM_AI` | Yozm IT AI 알림 |
+| `DISCORD_WEBHOOK_HADA_LINKS` | GeekNews 외부 링크형 글 알림 |
 | `DISCORD_WEBHOOK_AITIMES_DIGEST` | AI Times 일일 다이제스트 알림 |
 | `ANTHROPIC_API_KEY` | 소셜/요즘IT 태그 예측용 Anthropic API 키 |
 | `ANTHROPIC_TAG_MODEL` | 선택 사항. 태그 예측 모델. 기본값은 `claude-haiku-4-5-20251001` |
@@ -112,7 +115,7 @@ GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and varia
 | `보안·안전` | 보안 취약점, AI 안전성, 프라이버시, 악용 위험 |
 | `활용사례` | 위 분류에 걸리지 않는 실무 활용 사례 |
 
-소셜/요즘IT 태그는 Claude Haiku 4.5의 Claude API ID `claude-haiku-4-5-20251001`로 먼저 예측합니다. `ANTHROPIC_API_KEY`가 없거나 API 호출이 실패하면 [tag-classifier.js](/Users/kimgayoung/Github/daily-ai-news/tag-classifier.js)의 키워드 룰로 fallback합니다. LLM 호출에는 같은 파일의 `TAG_CLASSIFICATION_PROMPT`를 시스템 프롬프트로 사용하고, 모델 응답의 `tag`가 위 허용 태그 중 하나인지 검증한 뒤 적용합니다.
+소셜/요즘IT/GeekNews 태그는 Claude Haiku 4.5의 Claude API ID `claude-haiku-4-5-20251001`로 먼저 예측합니다. `ANTHROPIC_API_KEY`가 없거나 API 호출이 실패하면 [tag-classifier.js](/Users/kimgayoung/Github/daily-ai-news/tag-classifier.js)의 키워드 룰로 fallback합니다. LLM 호출에는 같은 파일의 `TAG_CLASSIFICATION_PROMPT`를 시스템 프롬프트로 사용하고, 모델 응답의 `tag`가 위 허용 태그 중 하나인지 검증한 뒤 적용합니다.
 
 ### 3. Initialize seen state
 
@@ -135,6 +138,8 @@ npm run check
 ```bash
 npm start
 ```
+
+GeekNews는 `https://news.hada.io/new?page=1`과 `page=2`를 확인합니다. 제목 링크가 외부 원문 URL인 글만 전송하고, `topic?id=...`만 있는 내부 질문/토론 글은 제외합니다. Discord 본문은 GeekNews topic 링크에 `utm_source=discord&utm_medium=bot`을 붙인 제목 링크와 최대 4개의 요약 불릿으로 구성됩니다.
 
 ### 5. Run AI Times digest
 
