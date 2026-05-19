@@ -39,9 +39,7 @@ async function main() {
     throw new Error(`Missing GitHub Secret/env ${WEBHOOK_ENV}`);
   }
 
-  for (const message of messages) {
-    await sendDiscordMessage(webhookUrl, message);
-  }
+  await sendDiscordDigestMessages(webhookUrl, messages);
 }
 
 async function fetchAiTimesArticles(date) {
@@ -261,29 +259,74 @@ function buildDigestMessages(date, articles) {
   return messages;
 }
 
-async function sendDiscordMessage(webhookUrl, message) {
-  const response = await fetch(webhookUrl, {
+async function sendDiscordDigestMessages(webhookUrl, messages) {
+  const [firstMessage, ...remainingMessages] = messages;
+  const threadId = await createDiscordForumThread(webhookUrl, firstMessage);
+
+  for (const message of remainingMessages) {
+    await sendDiscordThreadMessage(webhookUrl, threadId, message);
+  }
+}
+
+async function createDiscordForumThread(webhookUrl, message) {
+  const responseBody = await executeDiscordWebhook(webhookUrl, {
+    wait: "true"
+  }, {
+    ...buildForumWebhookFields({
+      title: message.title,
+      tagKey: "AI_NEWS",
+      requireTag: true
+    }),
+    content: message.content,
+    allowed_mentions: {
+      parse: []
+    }
+  });
+
+  const threadId = responseBody?.channel_id || responseBody?.id;
+  if (!threadId) {
+    throw new Error(`Discord webhook response did not include a thread id: ${JSON.stringify(responseBody).slice(0, 500)}`);
+  }
+
+  return threadId;
+}
+
+async function sendDiscordThreadMessage(webhookUrl, threadId, message) {
+  await executeDiscordWebhook(webhookUrl, {
+    thread_id: threadId,
+    wait: "true"
+  }, {
+    content: message.content,
+    allowed_mentions: {
+      parse: []
+    }
+  });
+}
+
+async function executeDiscordWebhook(webhookUrl, query, payload) {
+  const url = new URL(webhookUrl);
+  for (const [key, value] of Object.entries(query)) {
+    url.searchParams.set(key, value);
+  }
+
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      ...buildForumWebhookFields({
-        title: message.title,
-        tagKey: "AI_NEWS",
-        requireTag: true
-      }),
-      content: message.content,
-      allowed_mentions: {
-        parse: []
-      }
-    })
+    body: JSON.stringify(payload)
   });
 
   const body = await response.text();
   if (!response.ok) {
     throw new Error(`Discord returned ${response.status}: ${body.slice(0, 500)}`);
   }
+
+  if (!body) {
+    return null;
+  }
+
+  return JSON.parse(body);
 }
 
 function previousKstDate() {
