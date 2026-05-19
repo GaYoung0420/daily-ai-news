@@ -64,6 +64,7 @@ jobs:
           DISCORD_TAG_POLICY_REGULATION: ${{ secrets.DISCORD_TAG_POLICY_REGULATION }}
           DISCORD_TAG_SECURITY_SAFETY: ${{ secrets.DISCORD_TAG_SECURITY_SAFETY }}
           DISCORD_TAG_USE_CASE: ${{ secrets.DISCORD_TAG_USE_CASE }}
+          DISCORD_TAG_OTHER: ${{ secrets.DISCORD_TAG_OTHER }}
         run: npm run ${{ github.event.inputs.mode || 'check' }}
 
       - name: Commit seen state

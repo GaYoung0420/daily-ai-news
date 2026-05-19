@@ -70,6 +70,7 @@ export DISCORD_TAG_INFRA_SEMICONDUCTOR="..."
 export DISCORD_TAG_POLICY_REGULATION="..."
 export DISCORD_TAG_SECURITY_SAFETY="..."
 export DISCORD_TAG_USE_CASE="..."
+export DISCORD_TAG_OTHER="..."
 ```
 
 GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and variables > Actions**에 아래 값을 등록합니다. 토큰과 Webhook, 태그 ID는 Secrets에 넣고, `ANTHROPIC_TAG_MODEL`은 Variables에 넣어도 됩니다.
@@ -97,6 +98,7 @@ GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and varia
 | `DISCORD_TAG_POLICY_REGULATION` | `정책·규제` 포럼 태그 ID |
 | `DISCORD_TAG_SECURITY_SAFETY` | `보안·안전` 포럼 태그 ID |
 | `DISCORD_TAG_USE_CASE` | `활용사례` 포럼 태그 ID |
+| `DISCORD_TAG_OTHER` | `기타` 포럼 태그 ID |
 
 ### Forum tag rules
 
@@ -113,7 +115,8 @@ GitHub Actions에서 운영하려면 저장소의 **Settings > Secrets and varia
 | `인프라·반도체` | GPU, NPU, 데이터센터, 클라우드, 전력 |
 | `정책·규제` | 정부 정책, 규제, 소송, 국가 전략 |
 | `보안·안전` | 보안 취약점, AI 안전성, 프라이버시, 악용 위험 |
-| `활용사례` | 위 분류에 걸리지 않는 실무 활용 사례 |
+| `활용사례` | 실무 적용 사례, 산업별 활용, 마케팅/디자인/교육/의료/콘텐츠 제작 사례 |
+| `기타` | 위 분류에 명확히 들어가지 않는 AI 관련 게시물 |
 
 소셜/요즘IT/GeekNews 태그는 Claude Haiku 4.5의 Claude API ID `claude-haiku-4-5-20251001`로 먼저 예측합니다. `ANTHROPIC_API_KEY`가 없거나 API 호출이 실패하면 [tag-classifier.js](/Users/kimgayoung/Github/daily-ai-news/tag-classifier.js)의 키워드 룰로 fallback합니다. LLM 호출에는 같은 파일의 `TAG_CLASSIFICATION_PROMPT`를 시스템 프롬프트로 사용하고, 모델 응답의 `tag`가 위 허용 태그 중 하나인지 검증한 뒤 적용합니다.
 

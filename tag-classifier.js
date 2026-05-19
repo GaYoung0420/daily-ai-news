@@ -38,6 +38,10 @@ export const DISCORD_TAGS = {
   USE_CASE: {
     label: "활용사례",
     env: "DISCORD_TAG_USE_CASE"
+  },
+  OTHER: {
+    label: "기타",
+    env: "DISCORD_TAG_OTHER"
   }
 };
 
@@ -106,10 +110,16 @@ export const TAG_CLASSIFICATION_PROMPT = `
 - 예: macOS 보안 우회, AI 안전성 평가, 개인정보 노출, 딥페이크 악용, jailbreak, 피싱 자동화.
 
 9. "활용사례"
-- 위 태그들에 명확히 들어가지 않는 실제 적용 사례, 산업별 활용, 마케팅/디자인/교육/의료/콘텐츠 제작 사례에 붙인다.
+- 실제 적용 사례, 산업별 활용, 마케팅/디자인/교육/의료/콘텐츠 제작 사례에 붙인다.
 - 특정 도구의 사용법보다 "이런 분야에 AI를 적용했다"가 핵심이면 이 태그다.
-- 애매하거나 일반적인 AI 활용 사례도 이 태그를 사용한다.
+- 일반적인 AI 활용 사례라도 적용 분야나 사용 장면이 중심이면 이 태그를 사용한다.
 - 예: AI 광고제, 마케팅 자동화 사례, 디자인 결과물, 교육/의료 적용 사례, 개인 생산성 사례.
+
+10. "기타"
+- 위 9개 태그 어디에도 명확히 속하지 않는 기타 AI 관련 게시물에 붙인다.
+- 게시물이 AI와 관련은 있지만 제품/모델/투자/정책/보안/인프라/개발/자동화/활용사례 중 하나로 판단하기 어렵다면 이 태그다.
+- 단순 잡담, 커뮤니티 공지, 출처 맥락만으로 분류가 어려운 링크, 분류 기준 밖의 주변 주제는 이 태그를 사용한다.
+- 예: AI 업계 밈, 행사 소감, 커뮤니티 안내, 분류 근거가 부족한 짧은 게시물, 일반 기술 문화 글.
 
 우선순위 가이드:
 1. 사용법/팁/프롬프트/명령어가 핵심이면 "프롬프트·활용팁"
@@ -120,7 +130,8 @@ export const TAG_CLASSIFICATION_PROMPT = `
 6. 하드웨어/클라우드/전력/데이터센터가 핵심이면 "인프라·반도체"
 7. 법/정부/규제/소송이 핵심이면 "정책·규제"
 8. 보안/안전/프라이버시/악용 위험이 핵심이면 "보안·안전"
-9. 그래도 애매하면 "활용사례"
+9. 실제 적용 분야나 사용 장면이 핵심이면 "활용사례"
+10. 그래도 애매하면 "기타"
 
 반환 형식:
 {"tag":"프롬프트·활용팁"}
@@ -215,7 +226,7 @@ export function classifySocialTag(text) {
     }
   }
 
-  return "USE_CASE";
+  return "OTHER";
 }
 
 export async function classifySocialTagWithLlm({ title, text, source, env = process.env, fetchImpl = fetch }) {
@@ -254,7 +265,7 @@ export async function classifySocialTagWithLlm({ title, text, source, env = proc
 }
 
 export function tagLabel(tagKey) {
-  return DISCORD_TAGS[tagKey]?.label ?? DISCORD_TAGS.USE_CASE.label;
+  return DISCORD_TAGS[tagKey]?.label ?? DISCORD_TAGS.OTHER.label;
 }
 
 export function discordTagId(tagKey, env = process.env) {
