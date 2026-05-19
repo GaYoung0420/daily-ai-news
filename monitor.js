@@ -945,6 +945,11 @@ async function sendDiscordForumPost(account, post, webhookUrl) {
     console.warn(`[${account.key}] tag classified by fallback rules: ${classification.reason}`);
   }
 
+  const embeds = buildDiscordEmbeds({
+    account,
+    post,
+    title
+  });
   const payload = {
     ...buildForumWebhookFields({
       title: forumTitle,
@@ -956,6 +961,7 @@ async function sendDiscordForumPost(account, post, webhookUrl) {
       post,
       description
     }),
+    ...(embeds.length > 0 ? { embeds } : {}),
     allowed_mentions: {
       parse: []
     }
@@ -994,6 +1000,23 @@ function buildDiscordPostContent({ account, post, description }) {
   const bodyLimit = Math.max(0, DISCORD_CONTENT_LIMIT - suffix.length);
 
   return `${truncate(description, bodyLimit)}${suffix}`;
+}
+
+function buildDiscordEmbeds({ account, post, title }) {
+  if (!isHttpUrl(post.imageUrl)) {
+    return [];
+  }
+
+  const embed = {
+    title,
+    url: post.url,
+    color: account.color,
+    image: {
+      url: post.imageUrl
+    }
+  };
+
+  return [embed];
 }
 
 async function readSeen() {
@@ -1053,6 +1076,14 @@ function normalizeAbsoluteUrl(value, baseUrl) {
     return new URL(value, baseUrl).toString();
   } catch {
     return "";
+  }
+}
+
+function isHttpUrl(value) {
+  try {
+    return /^https?:$/.test(new URL(value).protocol);
+  } catch {
+    return false;
   }
 }
 
