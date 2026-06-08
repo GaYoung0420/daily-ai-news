@@ -445,6 +445,7 @@
   },
   "yozm:ai": {
     "items": [
+      "yozm:3787",
       "yozm:3786",
       "yozm:3785",
       "yozm:3784",
@@ -522,7 +523,7 @@
       "yozm:3700",
       "yozm:3698"
     ],
-    "updatedAt": "2026-06-05T12:14:15.342Z"
+    "updatedAt": "2026-06-08T00:12:19.992Z"
   },
   "hada:links": {
     "items": [
