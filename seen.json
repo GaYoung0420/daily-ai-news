@@ -91,6 +91,8 @@
   },
   "threads:choi.openai": {
     "items": [
+      "threads:DcQEefgEWCn",
+      "threads:DcQEdYAkSaF",
       "threads:DcP6LD0iqS3",
       "threads:DcPv8SJj0W0",
       "threads:DcPv7KQjx57",
@@ -288,11 +290,9 @@
       "threads:Db7gensjz-Z",
       "threads:Db7eJWngO3v",
       "threads:Db7eIZsAPD5",
-      "threads:Db7TxEUjz6w",
-      "threads:Db7TwkpjyHr",
-      "threads:Db7Tv9xj9oQ"
+      "threads:Db7TxEUjz6w"
     ],
-    "updatedAt": "2026-08-20T04:42:49.604Z"
+    "updatedAt": "2026-08-20T06:55:11.621Z"
   },
   "instagram:promppy_com": {
     "items": [
